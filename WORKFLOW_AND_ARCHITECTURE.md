@@ -13,7 +13,7 @@ A **Fuzzy Min-Max Neural Network (FMNN)** does something different: it draws **b
 - If a point is **outside** all boxes, it calculates how close it is to the nearest box surface using a **fuzzy membership score** between 0 and 1.
 
 ### The Big Problem with Old FMNN:
-When two boxes of different classes touch or overlap, the old 1992 algorithm cuts and shrinks them (called *contraction*). This cuts away real data regions and causes errors in high dimensions.
+When two boxes of different classes touch or overlap, the old 1992 algorithm cuts and shrinks them (called  *Simpsons comtraaction*). This cuts away real data regions and causes errors in high dimensions.
 
 ### The RF-FMNN Solution:
 Instead of cutting overlapping boxes:
