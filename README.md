@@ -115,6 +115,7 @@ Evaluation of maximum hyperbox expansion size $\theta \in [0.1, 0.4]$ across all
 ```
 RF-FMNN/
 ├── README.md                          # Methodology and benchmark overview
+├── COMPREHENSIVE_PROJECT_REPORT.md    # Master technical and scaling report
 ├── WORKFLOW_AND_ARCHITECTURE.md       # Step-by-step plain-English explainer
 ├── DIFFERENCE_NORMAL_VS_OUR_FMNN.md   # Structural and parallel comparison vs Simpson (1992)
 ├── FEATURE_SAMPLING_EXAMPLE.md        # Feature sampling theory and walkthrough
