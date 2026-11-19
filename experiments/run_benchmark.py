@@ -27,7 +27,7 @@ def run_cross_validation_benchmark(n_splits: int = 5, random_state: int = 42):
     results = []
 
     print("================================================================================")
-    print("STARTING BENCHMARK: 5-Fold Stratified Cross-Validation")
+    print("STARTING FULL BENCHMARK: 6 Extended Classification Metrics Across 5 Datasets")
     print("================================================================================")
 
     for ds_name, ds_info in datasets.items():
@@ -37,11 +37,16 @@ def run_cross_validation_benchmark(n_splits: int = 5, random_state: int = 42):
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
 
         for model_name, model_fn in models.items():
-            fold_accs = []
-            fold_f1s = []
-            fold_boxes = []
-            fold_train_times = []
-            fold_infer_times = []
+            metrics_accum = {
+                'accuracy': [],
+                'precision': [],
+                'recall_sensitivity': [],
+                'specificity': [],
+                'f1_score': [],
+                'auc_roc': [],
+                'total_hyperboxes': [],
+                'train_time_sec': []
+            }
 
             for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y)):
                 X_train, X_test = X[train_idx], X[test_idx]
@@ -50,31 +55,31 @@ def run_cross_validation_benchmark(n_splits: int = 5, random_state: int = 42):
                 m = model_fn()
                 metrics = evaluate_model(m, X_train, y_train, X_test, y_test)
 
-                fold_accs.append(metrics['accuracy'])
-                fold_f1s.append(metrics['f1_macro'])
-                fold_boxes.append(metrics['total_hyperboxes'])
-                fold_train_times.append(metrics['train_time_sec'])
-                fold_infer_times.append(metrics['infer_time_sec'])
+                for k in metrics_accum.keys():
+                    metrics_accum[k].append(metrics[k])
 
-            mean_acc = float(np.mean(fold_accs))
-            std_acc = float(np.std(fold_accs))
-            mean_f1 = float(np.mean(fold_f1s))
-            std_f1 = float(np.std(fold_f1s))
-            mean_boxes = float(np.mean(fold_boxes))
-            mean_train_time = float(np.mean(fold_train_times))
-
-            print(f"  {model_name:30s} | Acc: {mean_acc*100:5.2f}% (±{std_acc*100:4.2f}%) | F1: {mean_f1*100:5.2f}% | Boxes: {mean_boxes:5.1f}")
-
-            results.append({
+            res_entry = {
                 'dataset': ds_name,
                 'model': model_name,
-                'accuracy_mean': mean_acc,
-                'accuracy_std': std_acc,
-                'f1_macro_mean': mean_f1,
-                'f1_macro_std': std_f1,
-                'mean_hyperboxes': mean_boxes,
-                'mean_train_time': mean_train_time
-            })
+                'accuracy_mean': float(np.mean(metrics_accum['accuracy'])),
+                'accuracy_std': float(np.std(metrics_accum['accuracy'])),
+                'precision_mean': float(np.mean(metrics_accum['precision'])),
+                'precision_std': float(np.std(metrics_accum['precision'])),
+                'recall_sensitivity_mean': float(np.mean(metrics_accum['recall_sensitivity'])),
+                'recall_sensitivity_std': float(np.std(metrics_accum['recall_sensitivity'])),
+                'specificity_mean': float(np.mean(metrics_accum['specificity'])),
+                'specificity_std': float(np.std(metrics_accum['specificity'])),
+                'f1_score_mean': float(np.mean(metrics_accum['f1_score'])),
+                'f1_score_std': float(np.std(metrics_accum['f1_score'])),
+                'auc_roc_mean': float(np.mean(metrics_accum['auc_roc'])),
+                'auc_roc_std': float(np.std(metrics_accum['auc_roc'])),
+                'mean_hyperboxes': float(np.mean(metrics_accum['total_hyperboxes'])),
+                'mean_train_time': float(np.mean(metrics_accum['train_time_sec']))
+            }
+
+            print(f"  {model_name:28s} | Acc: {res_entry['accuracy_mean']*100:5.2f}% | Prec: {res_entry['precision_mean']*100:5.2f}% | Rec: {res_entry['recall_sensitivity_mean']*100:5.2f}% | Spec: {res_entry['specificity_mean']*100:5.2f}% | F1: {res_entry['f1_score_mean']*100:5.2f}% | AUC: {res_entry['auc_roc_mean']*100:5.2f}%")
+
+            results.append(res_entry)
 
     os.makedirs('experiments/results', exist_ok=True)
     with open('experiments/results/benchmark_results.json', 'w') as f:
@@ -82,7 +87,35 @@ def run_cross_validation_benchmark(n_splits: int = 5, random_state: int = 42):
 
     df = pd.DataFrame(results)
     df.to_csv('experiments/results/benchmark_results.csv', index=False)
-    print("\nBenchmark saved to experiments/results/.")
+
+    # Generate Markdown Tables by Model
+    md_content = "# Comprehensive Benchmark Metrics: Per-Model and Comparative Tables\n\n"
+    md_content += "Evaluated using 5-Fold Stratified Cross-Validation across: Accuracy, Precision, Recall (Sensitivity), Specificity, F1-Score, and AUC-ROC.\n\n"
+
+    for m_name in models.keys():
+        md_content += f"## Model: {m_name}\n\n"
+        md_content += "| Dataset | Accuracy | Precision | Recall (Sensitivity) | Specificity | F1-Score | AUC-ROC | Mean Boxes |\n"
+        md_content += "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n"
+        sub_df = df[df['model'] == m_name]
+        for _, row in sub_df.iterrows():
+            md_content += f"| **{row['dataset']}** | {row['accuracy_mean']*100:.2f}% ± {row['accuracy_std']*100:.2f}% | {row['precision_mean']*100:.2f}% ± {row['precision_std']*100:.2f}% | {row['recall_sensitivity_mean']*100:.2f}% ± {row['recall_sensitivity_std']*100:.2f}% | {row['specificity_mean']*100:.2f}% ± {row['specificity_std']*100:.2f}% | {row['f1_score_mean']*100:.2f}% ± {row['f1_score_std']*100:.2f}% | {row['auc_roc_mean']*100:.2f}% ± {row['auc_roc_std']*100:.2f}% | {row['mean_hyperboxes']:.1f} |\n"
+        md_content += "\n"
+
+    # Comparative Summary Table: Proposed RF-FMNN vs Baselines (Accuracy & F1)
+    md_content += "## Overall Comparative Summary: Accuracy and F1-Score Across Models\n\n"
+    md_content += "| Dataset | Metric | Basic FMNN (1992) | CART Tree | Random Forest | Proposed RF-FMNN |\n"
+    md_content += "| :--- | :--- | :---: | :---: | :---: | :---: |\n"
+    for ds_name in datasets.keys():
+        sub_ds = df[df['dataset'] == ds_name]
+        acc_vals = {r['model']: f"{r['accuracy_mean']*100:.2f}% ± {r['accuracy_std']*100:.2f}%" for _, r in sub_ds.iterrows()}
+        f1_vals = {r['model']: f"{r['f1_score_mean']*100:.2f}% ± {r['f1_score_std']*100:.2f}%" for _, r in sub_ds.iterrows()}
+        md_content += f"| **{ds_name}** | Accuracy | {acc_vals.get('Basic FMNN (Simpson 1992)', '-')} | {acc_vals.get('Decision Tree (CART)', '-')} | {acc_vals.get('Random Forest (Breiman)', '-')} | **{acc_vals.get('Proposed RF-FMNN', '-')}** |\n"
+        md_content += f"| | F1-Score | {f1_vals.get('Basic FMNN (Simpson 1992)', '-')} | {f1_vals.get('Decision Tree (CART)', '-')} | {f1_vals.get('Random Forest (Breiman)', '-')} | **{f1_vals.get('Proposed RF-FMNN', '-')}** |\n"
+
+    with open('experiments/results/DETAILED_METRICS_TABLES.md', 'w') as f:
+        f.write(md_content)
+
+    print("\nDetailed markdown tables generated at experiments/results/DETAILED_METRICS_TABLES.md")
     return df
 
 if __name__ == '__main__':
