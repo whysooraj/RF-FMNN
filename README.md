@@ -116,13 +116,16 @@ Evaluation of maximum hyperbox expansion size $\theta \in [0.1, 0.4]$ across all
 RF-FMNN/
 ├── README.md                          # Methodology and benchmark overview
 ├── WORKFLOW_AND_ARCHITECTURE.md       # Step-by-step plain-English explainer
+├── DIFFERENCE_NORMAL_VS_OUR_FMNN.md   # Structural and parallel comparison vs Simpson (1992)
 ├── FEATURE_SAMPLING_EXAMPLE.md        # Feature sampling theory and walkthrough
 ├── requirements.txt                   # Environment dependencies
 ├── run_all.py                         # One-click execution pipeline
 ├── figures/                           # Generated publication figures
 │   ├── benchmark_accuracy.png
 │   ├── benchmark_f1.png
-│   └── decision_boundaries.png
+│   ├── decision_boundaries.png
+│   ├── ray_multicore_scaling.png      # Speedup, efficiency & failure mode plots
+│   └── normal_vs_rf_fmnn_concept.png  # Contraction vs Centroid geometric comparison
 ├── src/
 │   ├── fmnn/
 │   │   ├── base_fmnn.py               # Classic Simpson (1992) FMNN
@@ -135,6 +138,7 @@ RF-FMNN/
 ├── experiments/
 │   ├── run_benchmark.py               # 5-fold cross-validation suite
 │   ├── benchmark_ray_scaling.py       # 1, 2, 4, 8 cores Ray scaling suite
+│   ├── plot_scaling_and_differences.py# Scaling and conceptual plotting script
 │   ├── ablation_study.py              # Theta sensitivity analysis
 │   ├── visualize.py                   # Boundary and benchmark plotting
 │   └── results/                       # CSV, JSON, and Markdown reports
