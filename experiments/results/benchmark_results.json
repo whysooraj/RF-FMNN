@@ -1,0 +1,252 @@
+[
+  {
+    "dataset": "Iris",
+    "model": "Basic FMNN (Simpson 1992)",
+    "accuracy_mean": 0.9400000000000001,
+    "accuracy_std": 0.038873012632301994,
+    "f1_macro_mean": 0.9395458342826764,
+    "f1_macro_std": 0.03936992581380415,
+    "mean_hyperboxes": 18.2,
+    "mean_train_time": 0.0038890842000228075
+  },
+  {
+    "dataset": "Iris",
+    "model": "Decision Tree (CART)",
+    "accuracy_mean": 0.9533333333333335,
+    "accuracy_std": 0.03399346342395189,
+    "f1_macro_mean": 0.9531151110098477,
+    "f1_macro_std": 0.034138786907427096,
+    "mean_hyperboxes": 0.0,
+    "mean_train_time": 0.0005124775999775011
+  },
+  {
+    "dataset": "Iris",
+    "model": "Random Forest (Breiman)",
+    "accuracy_mean": 0.9533333333333334,
+    "accuracy_std": 0.03399346342395189,
+    "f1_macro_mean": 0.9531151110098477,
+    "f1_macro_std": 0.034138786907427096,
+    "mean_hyperboxes": 0.0,
+    "mean_train_time": 0.017535842199959007
+  },
+  {
+    "dataset": "Iris",
+    "model": "Proposed RF-FMNN (Uncontracted)",
+    "accuracy_mean": 0.9400000000000001,
+    "accuracy_std": 0.04898979485566355,
+    "f1_macro_mean": 0.9396470975418344,
+    "f1_macro_std": 0.04941647046910203,
+    "mean_hyperboxes": 82.4,
+    "mean_train_time": 0.01730764280002859
+  },
+  {
+    "dataset": "Iris",
+    "model": "Enhanced RF-FMNN (Ours)",
+    "accuracy_mean": 0.9533333333333334,
+    "accuracy_std": 0.03399346342395189,
+    "f1_macro_mean": 0.9528395584015452,
+    "f1_macro_std": 0.0347071739550415,
+    "mean_hyperboxes": 317.0,
+    "mean_train_time": 0.07206336780000129
+  },
+  {
+    "dataset": "Wine",
+    "model": "Basic FMNN (Simpson 1992)",
+    "accuracy_mean": 0.9774603174603176,
+    "accuracy_std": 0.027609923689090675,
+    "f1_macro_mean": 0.9777268813058286,
+    "f1_macro_std": 0.02728400440623373,
+    "mean_hyperboxes": 46.6,
+    "mean_train_time": 0.010942455200029145
+  },
+  {
+    "dataset": "Wine",
+    "model": "Decision Tree (CART)",
+    "accuracy_mean": 0.8988888888888888,
+    "accuracy_std": 0.028955095946218597,
+    "f1_macro_mean": 0.9012215452103007,
+    "f1_macro_std": 0.027969714339924182,
+    "mean_hyperboxes": 0.0,
+    "mean_train_time": 0.000689094599965756
+  },
+  {
+    "dataset": "Wine",
+    "model": "Random Forest (Breiman)",
+    "accuracy_mean": 0.9830158730158731,
+    "accuracy_std": 0.022779851683695552,
+    "f1_macro_mean": 0.9840388007054675,
+    "f1_macro_std": 0.020898540673900602,
+    "mean_hyperboxes": 0.0,
+    "mean_train_time": 0.018414047400005983
+  },
+  {
+    "dataset": "Wine",
+    "model": "Proposed RF-FMNN (Uncontracted)",
+    "accuracy_mean": 0.9774603174603176,
+    "accuracy_std": 0.021299434518521104,
+    "f1_macro_mean": 0.9779168148290956,
+    "f1_macro_std": 0.021031786020174647,
+    "mean_hyperboxes": 203.2,
+    "mean_train_time": 0.04514786980000736
+  },
+  {
+    "dataset": "Wine",
+    "model": "Enhanced RF-FMNN (Ours)",
+    "accuracy_mean": 0.9493650793650794,
+    "accuracy_std": 0.04532684138301109,
+    "f1_macro_mean": 0.9509515486457015,
+    "f1_macro_std": 0.044042651164820125,
+    "mean_hyperboxes": 755.0,
+    "mean_train_time": 0.17412434539996866
+  },
+  {
+    "dataset": "BreastCancer",
+    "model": "Basic FMNN (Simpson 1992)",
+    "accuracy_mean": 0.9596180717279925,
+    "accuracy_std": 0.01420306020497115,
+    "f1_macro_mean": 0.9564510629536077,
+    "f1_macro_std": 0.015676143674685516,
+    "mean_hyperboxes": 78.8,
+    "mean_train_time": 0.07905617619999247
+  },
+  {
+    "dataset": "BreastCancer",
+    "model": "Decision Tree (CART)",
+    "accuracy_mean": 0.9104021114733737,
+    "accuracy_std": 0.027875560352709206,
+    "f1_macro_mean": 0.9027943264694587,
+    "f1_macro_std": 0.03168899373449561,
+    "mean_hyperboxes": 0.0,
+    "mean_train_time": 0.0038830962000474755
+  },
+  {
+    "dataset": "BreastCancer",
+    "model": "Random Forest (Breiman)",
+    "accuracy_mean": 0.9490762303990063,
+    "accuracy_std": 0.020998428505022055,
+    "f1_macro_mean": 0.9449703357534684,
+    "f1_macro_std": 0.02338718339259793,
+    "mean_hyperboxes": 0.0,
+    "mean_train_time": 0.026612023799998497
+  },
+  {
+    "dataset": "BreastCancer",
+    "model": "Proposed RF-FMNN (Uncontracted)",
+    "accuracy_mean": 0.9666356155876418,
+    "accuracy_std": 0.010181889812786825,
+    "f1_macro_mean": 0.9641890429666955,
+    "f1_macro_std": 0.010985265396033844,
+    "mean_hyperboxes": 381.8,
+    "mean_train_time": 0.36754158500000356
+  },
+  {
+    "dataset": "BreastCancer",
+    "model": "Enhanced RF-FMNN (Ours)",
+    "accuracy_mean": 0.9508150908244062,
+    "accuracy_std": 0.01621632011383414,
+    "f1_macro_mean": 0.9467701761374403,
+    "f1_macro_std": 0.018093511462029185,
+    "mean_hyperboxes": 1016.2,
+    "mean_train_time": 1.0122186429999829
+  },
+  {
+    "dataset": "TwoMoons",
+    "model": "Basic FMNN (Simpson 1992)",
+    "accuracy_mean": 0.9866666666666667,
+    "accuracy_std": 0.01943650631615102,
+    "f1_macro_mean": 0.9866629619338706,
+    "f1_macro_std": 0.019441906845830425,
+    "mean_hyperboxes": 21.0,
+    "mean_train_time": 0.013294717399980982
+  },
+  {
+    "dataset": "TwoMoons",
+    "model": "Decision Tree (CART)",
+    "accuracy_mean": 0.9666666666666666,
+    "accuracy_std": 0.027888667551135834,
+    "f1_macro_mean": 0.9666499830062382,
+    "f1_macro_std": 0.027905297261211482,
+    "mean_hyperboxes": 0.0,
+    "mean_train_time": 0.0005674216000215893
+  },
+  {
+    "dataset": "TwoMoons",
+    "model": "Random Forest (Breiman)",
+    "accuracy_mean": 0.97,
+    "accuracy_std": 0.012472191289246462,
+    "f1_macro_mean": 0.9699879534369895,
+    "f1_macro_std": 0.012476654830850776,
+    "mean_hyperboxes": 0.0,
+    "mean_train_time": 0.019509328799972536
+  },
+  {
+    "dataset": "TwoMoons",
+    "model": "Proposed RF-FMNN (Uncontracted)",
+    "accuracy_mean": 0.9866666666666667,
+    "accuracy_std": 0.012472191289246475,
+    "f1_macro_mean": 0.9866573986532534,
+    "f1_macro_std": 0.012484579615936901,
+    "mean_hyperboxes": 105.2,
+    "mean_train_time": 0.06780486699999529
+  },
+  {
+    "dataset": "TwoMoons",
+    "model": "Enhanced RF-FMNN (Ours)",
+    "accuracy_mean": 0.9733333333333333,
+    "accuracy_std": 0.013333333333333324,
+    "f1_macro_mean": 0.9732980764800795,
+    "f1_macro_std": 0.013378821255516784,
+    "mean_hyperboxes": 500.8,
+    "mean_train_time": 0.3194460519999893
+  },
+  {
+    "dataset": "Circles",
+    "model": "Basic FMNN (Simpson 1992)",
+    "accuracy_mean": 0.9833333333333334,
+    "accuracy_std": 0.010540925533894595,
+    "f1_macro_mean": 0.983323139136721,
+    "f1_macro_std": 0.01055265290103105,
+    "mean_hyperboxes": 23.2,
+    "mean_train_time": 0.015636548799989214
+  },
+  {
+    "dataset": "Circles",
+    "model": "Decision Tree (CART)",
+    "accuracy_mean": 0.9666666666666666,
+    "accuracy_std": 0.02788866755113586,
+    "f1_macro_mean": 0.9666091380950345,
+    "f1_macro_std": 0.027963010983030976,
+    "mean_hyperboxes": 0.0,
+    "mean_train_time": 0.0005539274000057048
+  },
+  {
+    "dataset": "Circles",
+    "model": "Random Forest (Breiman)",
+    "accuracy_mean": 0.9766666666666668,
+    "accuracy_std": 0.02000000000000001,
+    "f1_macro_mean": 0.9766490568230392,
+    "f1_macro_std": 0.02001112424642247,
+    "mean_hyperboxes": 0.0,
+    "mean_train_time": 0.018246594199990796
+  },
+  {
+    "dataset": "Circles",
+    "model": "Proposed RF-FMNN (Uncontracted)",
+    "accuracy_mean": 0.9833333333333334,
+    "accuracy_std": 0.014907119849998594,
+    "f1_macro_mean": 0.983317575856104,
+    "f1_macro_std": 0.014923702777765833,
+    "mean_hyperboxes": 120.0,
+    "mean_train_time": 0.07681611419998262
+  },
+  {
+    "dataset": "Circles",
+    "model": "Enhanced RF-FMNN (Ours)",
+    "accuracy_mean": 0.9800000000000001,
+    "accuracy_std": 0.01632993161855452,
+    "f1_macro_mean": 0.9799777530589544,
+    "f1_macro_std": 0.016348096169854314,
+    "mean_hyperboxes": 593.8,
+    "mean_train_time": 0.3766380629999958
+  }
+]

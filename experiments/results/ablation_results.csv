@@ -1,0 +1,17 @@
+dataset,configuration,accuracy,f1_macro
+Iris,"1. Proposed RF-FMNN (Coupon Collector, ~5 bags)",0.9400000000000001,0.9396470975418344
+Iris,2. RF-FMNN with Fixed M=30 Bags (No Subspace),0.9533333333333334,0.9531151110098477
+Iris,"3. RF-FMNN + Multi-Scale Theta [0.1, 0.35]",0.9466666666666667,0.9464651527809422
+Iris,4. Full ERF-FMNN (Subspaces + Multi-Scale + Soft-Voting),0.9533333333333334,0.9528395584015452
+Wine,"1. Proposed RF-FMNN (Coupon Collector, ~5 bags)",0.9774603174603176,0.9779168148290956
+Wine,2. RF-FMNN with Fixed M=30 Bags (No Subspace),0.9496825396825397,0.9511676627466101
+Wine,"3. RF-FMNN + Multi-Scale Theta [0.1, 0.35]",0.9552380952380952,0.9565009960799434
+Wine,4. Full ERF-FMNN (Subspaces + Multi-Scale + Soft-Voting),0.9493650793650794,0.9509515486457015
+BreastCancer,"1. Proposed RF-FMNN (Coupon Collector, ~5 bags)",0.9666356155876418,0.9641890429666955
+BreastCancer,2. RF-FMNN with Fixed M=30 Bags (No Subspace),0.9631113181183046,0.9603918584925569
+BreastCancer,"3. RF-FMNN + Multi-Scale Theta [0.1, 0.35]",0.9631268436578171,0.9601533372220997
+BreastCancer,4. Full ERF-FMNN (Subspaces + Multi-Scale + Soft-Voting),0.9508150908244062,0.9467701761374403
+TwoMoons,"1. Proposed RF-FMNN (Coupon Collector, ~5 bags)",0.9866666666666667,0.9866573986532534
+TwoMoons,2. RF-FMNN with Fixed M=30 Bags (No Subspace),0.9800000000000001,0.9799833163395716
+TwoMoons,"3. RF-FMNN + Multi-Scale Theta [0.1, 0.35]",0.9733333333333333,0.9732980764800795
+TwoMoons,4. Full ERF-FMNN (Subspaces + Multi-Scale + Soft-Voting),0.9733333333333333,0.9732980764800795
