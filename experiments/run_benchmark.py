@@ -4,7 +4,6 @@ import json
 import os
 import sys
 
-# Add root path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from sklearn.model_selection import StratifiedKFold
@@ -13,8 +12,8 @@ from sklearn.tree import DecisionTreeClassifier
 
 from src.data.dataset_loader import load_benchmark_datasets
 from src.fmnn.base_fmnn import BaseFMNN
+from src.fmnn.raw_rf_fmnn import RawRFFMNNClassifier
 from src.fmnn.rf_fmnn import RFFMNNClassifier
-from src.fmnn.erf_fmnn import EnhancedRFFMNNClassifier
 from src.utils.metrics import evaluate_model
 
 def run_cross_validation_benchmark(n_splits: int = 5, random_state: int = 42):
@@ -22,17 +21,17 @@ def run_cross_validation_benchmark(n_splits: int = 5, random_state: int = 42):
     models = {
         'Basic FMNN (Simpson 1992)': lambda: BaseFMNN(theta=0.2, gamma=1.0),
         'Decision Tree (CART)': lambda: DecisionTreeClassifier(random_state=random_state),
-        'Random Forest (Breiman)': lambda: RandomForestClassifier(n_estimators=30, random_state=random_state),
-        'Proposed RF-FMNN (Uncontracted)': lambda: RFFMNNClassifier(theta=0.2, gamma=1.0, random_state=random_state),
-        'Enhanced RF-FMNN (Ours)': lambda: EnhancedRFFMNNClassifier(
-            n_estimators=30, theta_range=(0.1, 0.35), max_features='sqrt', random_state=random_state
+        'Random Forest (Breiman)': lambda: RandomForestClassifier(n_estimators=35, random_state=random_state),
+        'Raw Proposed RF-FMNN': lambda: RawRFFMNNClassifier(theta=0.2, gamma=1.0, random_state=random_state),
+        'Upgraded RF-FMNN (Ours)': lambda: RFFMNNClassifier(
+            n_estimators=35, theta_range=(0.15, 0.35), max_features='sqrt', random_state=random_state
         )
     }
 
     results = []
 
     print("================================================================================")
-    print("STARTING BENCHMARK: 5-Fold Stratified Cross-Validation Across 5 Datasets")
+    print("STARTING BENCHMARK: 5-Fold Stratified Cross-Validation (Upgraded Engine)")
     print("================================================================================")
 
     for ds_name, ds_info in datasets.items():
@@ -68,7 +67,7 @@ def run_cross_validation_benchmark(n_splits: int = 5, random_state: int = 42):
             mean_boxes = float(np.mean(fold_boxes))
             mean_train_time = float(np.mean(fold_train_times))
 
-            print(f"  {model_name:35s} | Acc: {mean_acc*100:5.2f}% (±{std_acc*100:4.2f}%) | F1: {mean_f1*100:5.2f}% | Boxes: {mean_boxes:5.1f}")
+            print(f"  {model_name:32s} | Acc: {mean_acc*100:5.2f}% (±{std_acc*100:4.2f}%) | F1: {mean_f1*100:5.2f}% | Boxes: {mean_boxes:5.1f}")
 
             results.append({
                 'dataset': ds_name,
@@ -81,15 +80,13 @@ def run_cross_validation_benchmark(n_splits: int = 5, random_state: int = 42):
                 'mean_train_time': mean_train_time
             })
 
-    # Save to JSON
     os.makedirs('experiments/results', exist_ok=True)
     with open('experiments/results/benchmark_results.json', 'w') as f:
         json.dump(results, f, indent=2)
 
-    # Save to CSV
     df = pd.DataFrame(results)
     df.to_csv('experiments/results/benchmark_results.csv', index=False)
-    print("\nBenchmark successfully completed and saved to experiments/results/.")
+    print("\nBenchmark saved to experiments/results/.")
     return df
 
 if __name__ == '__main__':

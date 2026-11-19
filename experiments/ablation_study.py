@@ -8,37 +8,39 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from sklearn.model_selection import StratifiedKFold
 from src.data.dataset_loader import load_benchmark_datasets
-from src.fmnn.base_fmnn import BaseFMNN
+from src.fmnn.raw_rf_fmnn import RawRFFMNNClassifier
 from src.fmnn.rf_fmnn import RFFMNNClassifier
-from src.fmnn.erf_fmnn import EnhancedRFFMNNClassifier
 from src.utils.metrics import evaluate_model
 
 def run_ablation_study(random_state: int = 42):
     """
-    Ablation experiments to isolate the contribution of:
-    1. Ensemble Bagging Size (Coupon Collector vs. 10 vs. 30 vs. 50 estimators)
-    2. Feature Subspace Selection (Full features vs. Sqrt features)
-    3. Soft Fuzzy Evidence Voting vs Hard Discrete Majority Voting
+    Ablation experiments isolating:
+    1. Raw Proposed RF-FMNN (Coupon Collector, Hard Voting, No Subspace)
+    2. Fixed M=35 Bags, Full Features, Hard/Discrete Overlap
+    3. Multi-Scale Theta [0.15, 0.35] + Dimension-Normalized Metric
+    4. Full Upgraded RF-FMNN (Subspaces + Continuous Anchor + Support Weighting + Soft Consensus)
     """
     datasets = load_benchmark_datasets()
-    target_datasets = ['Iris', 'Wine', 'BreastCancer', 'TwoMoons']
+    target_datasets = ['Iris', 'Wine', 'BreastCancer', 'TwoMoons', 'Circles']
 
     ablation_configs = {
-        '1. Proposed RF-FMNN (Coupon Collector, ~5 bags)': lambda: RFFMNNClassifier(theta=0.2, random_state=random_state),
-        '2. RF-FMNN with Fixed M=30 Bags (No Subspace)': lambda: EnhancedRFFMNNClassifier(
-            n_estimators=30, theta_range=(0.2, 0.2), max_features=1.0, random_state=random_state
+        '1. Raw Proposal (Coupon Collector, Hard Voting)': lambda: RawRFFMNNClassifier(
+            theta=0.2, random_state=random_state
         ),
-        '3. RF-FMNN + Multi-Scale Theta [0.1, 0.35]': lambda: EnhancedRFFMNNClassifier(
-            n_estimators=30, theta_range=(0.1, 0.35), max_features=1.0, random_state=random_state
+        '2. Fixed M=35 (Full Features, Static Theta)': lambda: RFFMNNClassifier(
+            n_estimators=35, theta_range=(0.2, 0.2), max_features=1.0, random_state=random_state
         ),
-        '4. Full ERF-FMNN (Subspaces + Multi-Scale + Soft-Voting)': lambda: EnhancedRFFMNNClassifier(
-            n_estimators=30, theta_range=(0.1, 0.35), max_features='sqrt', random_state=random_state
+        '3. Multi-Scale Theta + Full Features': lambda: RFFMNNClassifier(
+            n_estimators=35, theta_range=(0.15, 0.35), max_features=1.0, random_state=random_state
+        ),
+        '4. Full Upgraded RF-FMNN (Subspace + Unified Anchor + Soft)': lambda: RFFMNNClassifier(
+            n_estimators=35, theta_range=(0.15, 0.35), max_features='sqrt', random_state=random_state
         )
     }
 
     ablation_results = []
     print("\n================================================================================")
-    print("RUNNING ABLATION STUDY")
+    print("RUNNING ABLATION STUDY (ISOLATING ARCHITECTURAL COMPONENTS)")
     print("================================================================================")
 
     for ds_name in target_datasets:
@@ -55,9 +57,9 @@ def run_ablation_study(random_state: int = 42):
                 accs.append(metrics['accuracy'])
                 f1s.append(metrics['f1_macro'])
 
-            mean_acc = np.mean(accs)
-            mean_f1 = np.mean(f1s)
-            print(f"  {cfg_name:60s} | Acc: {mean_acc*100:5.2f}% | F1: {mean_f1*100:5.2f}%")
+            mean_acc = float(np.mean(accs))
+            mean_f1 = float(np.mean(f1s))
+            print(f"  {cfg_name:65s} | Acc: {mean_acc*100:5.2f}% | F1: {mean_f1*100:5.2f}%")
             ablation_results.append({
                 'dataset': ds_name,
                 'configuration': cfg_name,

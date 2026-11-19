@@ -9,17 +9,17 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.data.dataset_loader import load_benchmark_datasets
 from src.fmnn.base_fmnn import BaseFMNN
+from src.fmnn.raw_rf_fmnn import RawRFFMNNClassifier
 from src.fmnn.rf_fmnn import RFFMNNClassifier
-from src.fmnn.erf_fmnn import EnhancedRFFMNNClassifier
 
 def plot_decision_boundaries():
     datasets = load_benchmark_datasets()
     target_datasets = ['TwoMoons', 'Circles']
     models = {
         'Basic FMNN (Simpson)': BaseFMNN(theta=0.2, gamma=1.0),
-        'Proposed RF-FMNN': RFFMNNClassifier(theta=0.2, gamma=1.0, random_state=42),
-        'Enhanced RF-FMNN (Ours)': EnhancedRFFMNNClassifier(
-            n_estimators=30, theta_range=(0.1, 0.35), max_features=1.0, random_state=42
+        'Raw Proposed RF-FMNN': RawRFFMNNClassifier(theta=0.2, gamma=1.0, random_state=42),
+        'Upgraded RF-FMNN (Ours)': RFFMNNClassifier(
+            n_estimators=35, theta_range=(0.15, 0.35), max_features=1.0, random_state=42
         )
     }
 
@@ -30,7 +30,6 @@ def plot_decision_boundaries():
         X = datasets[ds_name]['X']
         y = datasets[ds_name]['y']
 
-        # Mesh grid
         h = 0.015
         x_min, x_max = X[:, 0].min() - 0.08, X[:, 0].max() + 0.08
         y_min, y_max = X[:, 1].min() - 0.08, X[:, 1].max() + 0.08
@@ -43,9 +42,8 @@ def plot_decision_boundaries():
             Z = model_inst.predict(grid_points)
             Z = Z.reshape(xx.shape)
 
-            # Draw decision surface with neutral muted colors
             ax.contourf(xx, yy, Z, alpha=0.35, cmap=plt.cm.coolwarm)
-            scatter = ax.scatter(X[:, 0], X[:, 1], c=y, cmap=plt.cm.coolwarm, edgecolors='k', s=25, alpha=0.85)
+            ax.scatter(X[:, 0], X[:, 1], c=y, cmap=plt.cm.coolwarm, edgecolors='k', s=25, alpha=0.85)
 
             if row_idx == 0:
                 ax.set_title(f"{model_name}", fontsize=12, fontweight='bold')
