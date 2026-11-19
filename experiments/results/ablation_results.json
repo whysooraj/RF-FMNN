@@ -1,122 +1,122 @@
 [
   {
     "dataset": "Iris",
-    "configuration": "1. Raw Proposal (Coupon Collector, Hard Voting)",
+    "configuration": "RF-FMNN (theta = 0.1)",
+    "accuracy": 0.9400000000000001,
+    "f1_macro": 0.9398830409356724
+  },
+  {
+    "dataset": "Iris",
+    "configuration": "RF-FMNN (theta = 0.2)",
     "accuracy": 0.9400000000000001,
     "f1_macro": 0.9396470975418344
   },
   {
     "dataset": "Iris",
-    "configuration": "2. Fixed M=35 (Full Features, Static Theta)",
+    "configuration": "RF-FMNN (theta = 0.3)",
     "accuracy": 0.9533333333333334,
-    "f1_macro": 0.953216374269006
+    "f1_macro": 0.9532497911445279
   },
   {
     "dataset": "Iris",
-    "configuration": "3. Multi-Scale Theta + Full Features",
-    "accuracy": 0.9533333333333334,
-    "f1_macro": 0.953216374269006
-  },
-  {
-    "dataset": "Iris",
-    "configuration": "4. Full Upgraded RF-FMNN (Subspace + Unified Anchor + Soft)",
-    "accuracy": 0.9666666666666668,
-    "f1_macro": 0.9665152780942254
+    "configuration": "RF-FMNN (theta = 0.4)",
+    "accuracy": 0.9400000000000001,
+    "f1_macro": 0.9394728081926897
   },
   {
     "dataset": "Wine",
-    "configuration": "1. Raw Proposal (Coupon Collector, Hard Voting)",
+    "configuration": "RF-FMNN (theta = 0.1)",
+    "accuracy": 0.9552380952380952,
+    "f1_macro": 0.9565331276910225
+  },
+  {
+    "dataset": "Wine",
+    "configuration": "RF-FMNN (theta = 0.2)",
     "accuracy": 0.9774603174603176,
     "f1_macro": 0.9779168148290956
   },
   {
     "dataset": "Wine",
-    "configuration": "2. Fixed M=35 (Full Features, Static Theta)",
-    "accuracy": 0.9553968253968254,
-    "f1_macro": 0.9580181793515127
+    "configuration": "RF-FMNN (theta = 0.3)",
+    "accuracy": 0.9774603174603176,
+    "f1_macro": 0.9774088783211591
   },
   {
     "dataset": "Wine",
-    "configuration": "3. Multi-Scale Theta + Full Features",
-    "accuracy": 0.9496825396825397,
-    "f1_macro": 0.9511676627466101
-  },
-  {
-    "dataset": "Wine",
-    "configuration": "4. Full Upgraded RF-FMNN (Subspace + Unified Anchor + Soft)",
-    "accuracy": 0.9719047619047618,
-    "f1_macro": 0.9725910788366928
+    "configuration": "RF-FMNN (theta = 0.4)",
+    "accuracy": 0.9776190476190475,
+    "f1_macro": 0.9783853998926464
   },
   {
     "dataset": "BreastCancer",
-    "configuration": "1. Raw Proposal (Coupon Collector, Hard Voting)",
+    "configuration": "RF-FMNN (theta = 0.1)",
+    "accuracy": 0.9666511411271541,
+    "f1_macro": 0.9642829001485049
+  },
+  {
+    "dataset": "BreastCancer",
+    "configuration": "RF-FMNN (theta = 0.2)",
     "accuracy": 0.9666356155876418,
     "f1_macro": 0.9641890429666955
   },
   {
     "dataset": "BreastCancer",
-    "configuration": "2. Fixed M=35 (Full Features, Static Theta)",
-    "accuracy": 0.9648967551622418,
-    "f1_macro": 0.9624868150090947
-  },
-  {
-    "dataset": "BreastCancer",
-    "configuration": "3. Multi-Scale Theta + Full Features",
+    "configuration": "RF-FMNN (theta = 0.3)",
     "accuracy": 0.9613724576929048,
-    "f1_macro": 0.9587254918332153
+    "f1_macro": 0.9582825426897126
   },
   {
     "dataset": "BreastCancer",
-    "configuration": "4. Full Upgraded RF-FMNN (Subspace + Unified Anchor + Soft)",
-    "accuracy": 0.9508306163639186,
-    "f1_macro": 0.9475209475917309
+    "configuration": "RF-FMNN (theta = 0.4)",
+    "accuracy": 0.9490762303990063,
+    "f1_macro": 0.9451119315670293
   },
   {
     "dataset": "TwoMoons",
-    "configuration": "1. Raw Proposal (Coupon Collector, Hard Voting)",
+    "configuration": "RF-FMNN (theta = 0.1)",
+    "accuracy": 0.9866666666666667,
+    "f1_macro": 0.9866592510196515
+  },
+  {
+    "dataset": "TwoMoons",
+    "configuration": "RF-FMNN (theta = 0.2)",
     "accuracy": 0.9866666666666667,
     "f1_macro": 0.9866573986532534
   },
   {
     "dataset": "TwoMoons",
-    "configuration": "2. Fixed M=35 (Full Features, Static Theta)",
+    "configuration": "RF-FMNN (theta = 0.3)",
+    "accuracy": 0.9799999999999999,
+    "f1_macro": 0.9799888796201885
+  },
+  {
+    "dataset": "TwoMoons",
+    "configuration": "RF-FMNN (theta = 0.4)",
+    "accuracy": 0.8866666666666667,
+    "f1_macro": 0.8862287390979725
+  },
+  {
+    "dataset": "Circles",
+    "configuration": "RF-FMNN (theta = 0.1)",
+    "accuracy": 0.9866666666666666,
+    "f1_macro": 0.9866629619338705
+  },
+  {
+    "dataset": "Circles",
+    "configuration": "RF-FMNN (theta = 0.2)",
     "accuracy": 0.9833333333333334,
     "f1_macro": 0.983317575856104
   },
   {
-    "dataset": "TwoMoons",
-    "configuration": "3. Multi-Scale Theta + Full Features",
-    "accuracy": 0.9799999999999999,
-    "f1_macro": 0.9799888796201888
-  },
-  {
-    "dataset": "TwoMoons",
-    "configuration": "4. Full Upgraded RF-FMNN (Subspace + Unified Anchor + Soft)",
-    "accuracy": 0.9799999999999999,
-    "f1_macro": 0.9799888796201888
+    "dataset": "Circles",
+    "configuration": "RF-FMNN (theta = 0.3)",
+    "accuracy": 0.9766666666666668,
+    "f1_macro": 0.9766323359966119
   },
   {
     "dataset": "Circles",
-    "configuration": "1. Raw Proposal (Coupon Collector, Hard Voting)",
-    "accuracy": 0.9833333333333334,
-    "f1_macro": 0.983317575856104
-  },
-  {
-    "dataset": "Circles",
-    "configuration": "2. Fixed M=35 (Full Features, Static Theta)",
-    "accuracy": 0.99,
-    "f1_macro": 0.989999073816801
-  },
-  {
-    "dataset": "Circles",
-    "configuration": "3. Multi-Scale Theta + Full Features",
-    "accuracy": 0.99,
-    "f1_macro": 0.9899916581697858
-  },
-  {
-    "dataset": "Circles",
-    "configuration": "4. Full Upgraded RF-FMNN (Subspace + Unified Anchor + Soft)",
-    "accuracy": 0.99,
-    "f1_macro": 0.9899916581697858
+    "configuration": "RF-FMNN (theta = 0.4)",
+    "accuracy": 0.9333333333333333,
+    "f1_macro": 0.9328717519689945
   }
 ]

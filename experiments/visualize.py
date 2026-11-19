@@ -9,22 +9,18 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.data.dataset_loader import load_benchmark_datasets
 from src.fmnn.base_fmnn import BaseFMNN
-from src.fmnn.raw_rf_fmnn import RawRFFMNNClassifier
 from src.fmnn.rf_fmnn import RFFMNNClassifier
 
 def plot_decision_boundaries():
     datasets = load_benchmark_datasets()
     target_datasets = ['TwoMoons', 'Circles']
     models = {
-        'Basic FMNN (Simpson)': BaseFMNN(theta=0.2, gamma=1.0),
-        'Raw Proposed RF-FMNN': RawRFFMNNClassifier(theta=0.2, gamma=1.0, random_state=42),
-        'Upgraded RF-FMNN (Ours)': RFFMNNClassifier(
-            n_estimators=35, theta_range=(0.15, 0.35), max_features=1.0, random_state=42
-        )
+        'Basic FMNN (Simpson 1992)': BaseFMNN(theta=0.2, gamma=1.0),
+        'Proposed RF-FMNN': RFFMNNClassifier(theta=0.2, gamma=1.0, random_state=42)
     }
 
     os.makedirs('figures', exist_ok=True)
-    fig, axes = plt.subplots(len(target_datasets), len(models), figsize=(15, 9))
+    fig, axes = plt.subplots(len(target_datasets), len(models), figsize=(11, 8))
 
     for row_idx, ds_name in enumerate(target_datasets):
         X = datasets[ds_name]['X']
@@ -73,9 +69,9 @@ def plot_benchmark_bars():
     os.makedirs('figures', exist_ok=True)
 
     # 1. Accuracy Plot
-    fig, ax = plt.subplots(figsize=(13, 6))
+    fig, ax = plt.subplots(figsize=(12, 6))
     x = np.arange(len(datasets))
-    width = 0.16
+    width = 0.2
 
     for i, model in enumerate(models):
         sub_df = df[df['model'] == model]
@@ -87,7 +83,7 @@ def plot_benchmark_bars():
     ax.set_title('Classification Accuracy Across Standard Benchmark Datasets', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(datasets, fontsize=11)
-    ax.set_ylim(50, 105)
+    ax.set_ylim(60, 105)
     ax.legend(loc='lower right', framealpha=0.9)
     ax.grid(axis='y', linestyle='--', alpha=0.5)
 
@@ -97,7 +93,7 @@ def plot_benchmark_bars():
     print("Saved benchmark accuracy plot to figures/benchmark_accuracy.png")
 
     # 2. Macro F1 Plot
-    fig, ax = plt.subplots(figsize=(13, 6))
+    fig, ax = plt.subplots(figsize=(12, 6))
     for i, model in enumerate(models):
         sub_df = df[df['model'] == model]
         f1s = [sub_df[sub_df['dataset'] == ds]['f1_macro_mean'].values[0] * 100 for ds in datasets]
@@ -108,7 +104,7 @@ def plot_benchmark_bars():
     ax.set_title('Macro F1-Score Comparison Across Datasets', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(datasets, fontsize=11)
-    ax.set_ylim(50, 105)
+    ax.set_ylim(60, 105)
     ax.legend(loc='lower right', framealpha=0.9)
     ax.grid(axis='y', linestyle='--', alpha=0.5)
 

@@ -12,15 +12,15 @@ A **Fuzzy Min-Max Neural Network (FMNN)** does something different: it draws **b
 - If a point is **inside** a box, it belongs to that box's class.
 - If a point is **outside** all boxes, it calculates how close it is to the nearest box surface using a **fuzzy membership score** between 0 and 1.
 
-### The Big Problem with Old FMNN:
-When two boxes of different classes touch or overlap, the old 1992 algorithm cuts and shrinks them (called  *Simpsons comtraaction*). This cuts away real data regions and causes errors in high dimensions.
+### The Problem with Conventional FMNN:
+When two boxes of different classes touch or overlap, the original 1992 algorithm cuts and shrinks them (called *Simpson's contraction*). This cuts away real data regions and causes errors in complex, overlapping, or high-dimensional spaces.
 
-### The RF-FMNN Solution:
+### The RF-FMNN Methodology:
 Instead of cutting overlapping boxes:
-1. It **keeps the boxes intact** without shrinking them.
-2. It calculates the **center point (centroid)** of the real data points inside each box.
-3. If an input falls inside overlapping boxes from different classes, it awards the win to whichever box has its **centroid closest** to that point.
-4. It trains **an ensemble (forest)** of these box networks using random samples (bootstrap) and random features (subspaces), then votes on the final answer.
+1. It **keeps the hyperbox boundaries intact** without contraction.
+2. It calculates the **center point (centroid)** of the real data observations inside each hyperbox.
+3. If a test observation falls inside overlapping hyperboxes of different classes, classification is determined by the **nearest data-based centroid**.
+4. It trains **an ensemble** of multiple independent FMNN models using bootstrap random sampling with replacement, then uses majority voting to make the final classification.
 
 ---
 
@@ -28,184 +28,156 @@ Instead of cutting overlapping boxes:
 
 ```
 +-------------------------------------------------------------------------------+
-|                             RAW DATASET (e.g. Iris)                           |
-|                    Features: Length, Width | Label: Flower Type               |
+|                             RAW DATASET                                       |
+|                    Features: Numerical Values | Label: Class Label            |
 +-------------------------------------------------------------------------------+
                                         |
                                         v
 +-------------------------------------------------------------------------------+
 | STEP 1: PREPROCESSING & SCALING                                               |
-| Scale every feature strictly into range [0.0, 1.0] using Min-Max scaling      |
+| Check missing values, encode labels, and normalize features to [0.0, 1.0]     |
 +-------------------------------------------------------------------------------+
                                         |
                                         v
 +-------------------------------------------------------------------------------+
 | STEP 2: DATASET SPLIT                                                         |
-| 80% Training Data (used to build boxes) | 20% Test Data (hidden until evaluation)|
+| Training Set (used for sampling & model training) | Test Set (evaluation)     |
 +-------------------------------------------------------------------------------+
                                         |
                                         v
 +-------------------------------------------------------------------------------+
-| STEP 3: ENSEMBLE SAMPLING (For each Tree m = 1 to M):                         |
-|   A. Row Sampling (Bootstrap with replacement: pick N rows randomly)          |
-|   B. Column Sampling (Subspace: pick k = sqrt(d) features randomly)           |
+| STEP 3: BOOTSTRAP RANDOM SAMPLING                                             |
+| Generate bootstrap samples with replacement until the union of unique IDs     |
+| covers 100% of the training dataset observations                              |
 +-------------------------------------------------------------------------------+
                                         |
                                         v
 +-------------------------------------------------------------------------------+
-| STEP 4: HYPERBOX EXPANSION & CENTROID CALCULATION                             |
-|   - Feed sampled points one by one                                            |
-|   - Grow existing box if expanded size <= max size (theta)                    |
-|   - Otherwise create new box                                                  |
-|   - DO NOT contract overlapping boxes                                         |
-|   - Calculate average position (centroid) of all points inside each box       |
+| STEP 4: INDEPENDENT FMNN TRAINING (WITHOUT CONTRACTION)                       |
+|   - Provide each bootstrap sample to a separate FMNN model                    |
+|   - Expand hyperboxes according to expansion criteria and max size theta      |
+|   - Do not contract or modify overlapping hyperboxes                          |
+|   - Calculate hyperbox centroid as arithmetic mean of assigned observations   |
+|     (multiplicity of duplicate observations is retained)                      |
 +-------------------------------------------------------------------------------+
                                         |
                                         v
 +-------------------------------------------------------------------------------+
-| STEP 5: TEST INFERENCE (For an unseen test sample x):                         |
-|   - Each Tree m looks at sample x using its selected features                 |
-|   - If x is inside boxes of competing classes: use nearest centroid           |
-|   - If x is outside all boxes: use fuzzy boundary membership                  |
-|   - Each Tree produces a class prediction or fuzzy score vector               |
+| STEP 5: TEST OBSERVATION EVALUATION                                           |
+|   - Case A (Inside Overlapping Boxes of Diff Classes): Resolve via nearest    |
+|     data-based centroid using Euclidean distance                              |
+|   - Case B (Inside Single Box / Non-overlapping): Assign that box's class     |
+|   - Case C (Outside All Boxes): Use FMNN fuzzy membership function            |
 +-------------------------------------------------------------------------------+
                                         |
                                         v
 +-------------------------------------------------------------------------------+
-| STEP 6: ENSEMBLE CONSENSUS (VOTING)                                           |
-| Combine outputs across all M trees (majority vote or soft fuzzy sum)          |
-| Output: Final Class Label                                                     |
+| STEP 6: ENSEMBLE MAJORITY VOTING                                              |
+| Collect independent predictions from all FMNN models                          |
+| Select class receiving the highest number of votes as final prediction        |
 +-------------------------------------------------------------------------------+
 ```
 
 ---
 
-## 3. How Sampling Works (Row & Column Sampling)
+## 3. How Bootstrap Sampling Works
 
-Sampling is the engine that gives the ensemble its stability and power. It consists of two stages: **Row Sampling (Bagging)** and **Column Sampling (Random Subspaces)**.
+Bootstrap sampling is performed with replacement on the training dataset.
 
-### A. Row Sampling (Bootstrap with Replacement)
-
-Imagine an urn with 5 balls numbered `[1, 2, 3, 4, 5]`.
-To create a bootstrap sample of size 5:
-1. Draw a ball, write down its number, and **put it back in the urn**.
+### Sampling With Replacement
+Imagine a dataset with 5 training observations: `[Obs 1, Obs 2, Obs 3, Obs 4, Obs 5]`.
+When creating a bootstrap sample of size 5:
+1. Draw an observation at random, record its ID, and **return it to the pool**.
 2. Repeat 5 times.
 
-You might end up with:
-`Bag 1: [2, 2, 4, 1, 5]`  (Ball 3 was missed, Ball 2 appeared twice)
+A single bootstrap sample might contain:
+`Sample 1: [Obs 2, Obs 2, Obs 4, Obs 1, Obs 5]`  (Obs 3 was omitted, Obs 2 appears twice)
 
-In machine learning terms:
-- **In-Bag Data (~63.2%)**: The unique training points chosen for that tree.
-- **Duplicates**: Some points appear 2 or 3 times. When calculating the centroid of a hyperbox, duplicate points are counted with their full multiplicity (weighting the centroid toward denser regions).
-- **Out-of-Bag (OOB) Data (~36.8%)**: Points never picked for this tree. They act as an automatic validation set to score the model without touching the test set.
-
-### B. Column Sampling (Random Feature Subspaces)
-
-If the dataset has 30 features (e.g. Breast Cancer):
-- A single tree does not look at all 30 features at once.
-- Instead, each tree randomly selects a subset of features:
-  $$k = \lfloor\sqrt{30}\rfloor \approx 5 \text{ features}$$
-
-**Why this matters:**
-In 30 dimensions, hyperboxes suffer from the curse of dimensionality (they become empty shells). By projecting down to 5 random features per tree:
-1. Hyperboxes remain compact and capture meaningful cluster densities.
-2. Different trees learn different perspectives of the data (decorrelation).
+### The Complete Coverage Rule
+In the proposed RF-FMNN:
+- Bootstrap samples are continuously generated until the union of their unique observation IDs covers the entire original training dataset:
+  $$\bigcup_{b=1}^B I_b = \{1, 2, \dots, N\}$$
+- This ensures that every original training observation contributes to at least one FMNN classifier in the ensemble.
 
 ---
 
 ## 4. Hyperbox Construction and Overlap Handling
 
-### How a Box Grows (Expansion)
+### Hyperbox Expansion
+A hyperbox $B_j$ is defined by:
+- $V_j$: Lower boundary vector $(v_{j1}, \dots, v_{jn})$
+- $W_j$: Upper boundary vector $(w_{j1}, \dots, w_{jn})$
 
-A hyperbox $B_j$ is defined by two corner vectors:
-- $V_j$: Min corner coordinates (bottom-left in 2D)
-- $W_j$: Max corner coordinates (top-right in 2D)
-
-When a new training point $x$ with class $c$ arrives:
-1. Search existing boxes of class $c$.
-2. Check if stretching the box to include $x$ exceeds maximum size $\theta$:
-   $$\sum_{i=1}^d (\max(w_{ji}, x_i) - \min(v_{ji}, x_i)) \le d \cdot \theta$$
-3. If it fits, expand the box:
+When a training observation $x$ of class $c$ is evaluated:
+1. Search existing hyperboxes of class $c$.
+2. Check if expanding box $B_j$ to include $x$ satisfies maximum size $\theta$:
+   $$\sum_{i=1}^n (\max(w_{ji}, x_i) - \min(v_{ji}, x_i)) \le n \cdot \theta$$
+3. If satisfied, expand:
    $$v_{ji} \leftarrow \min(v_{ji}, x_i), \quad w_{ji} \leftarrow \max(w_{ji}, x_i)$$
-4. If it does not fit in any existing box of class $c$, start a new 1-point box at $x$.
+4. If no existing box of class $c$ can expand, initialize a new hyperbox with $V = x, W = x$.
 
-### The Centroid
+### Centroid Calculation
+The centroid $C_j$ is computed as the arithmetic mean of all observations assigned to that box:
 
-Every time points are placed inside box $B_j$, we store them. The centroid $C_j$ is simply the arithmetic average of all points in that box:
+$$C_j = \frac{1}{|P_j|} \sum_{x \in P_j} x$$
 
-$$C_j = \left( \frac{\sum x_1}{|P_j|}, \frac{\sum x_2}{|P_j|}, \dots, \frac{\sum x_d}{|P_j|} \right)$$
+If an observation was drawn multiple times in the bootstrap sample, it is counted according to its multiplicity, correctly biasing the centroid toward denser regions.
 
 ### Overlap Handling Without Contraction
-
-In classic FMNN, if Box A (Class 0) and Box B (Class 1) overlap, the algorithm shrinks them along one axis to create a gap.
-In RF-FMNN, **no shrinking occurs**. Both boxes keep their original boundaries.
+Unlike conventional FMNN approaches that use overlap contraction, RF-FMNN preserves the learned hyperbox boundaries.
 
 ```
 +---------------------------------------+
-|  BOX A (Class 0)                      |
+|  Hyperbox A (Class 0)                 |
 |                                       |
 |          [Centroid A]                 |
 |                   +-------------------+-------------------+
-|                   | OVERLAP REGION    |                   |
-|                   |        x (Test)   |                   |
+|                   | Overlap Zone      |                   |
+|                   |       x (Test)    |                   |
 |                   |                   |    [Centroid B]   |
 +-------------------+-------------------+                   |
-                    |                     BOX B (Class 1)   |
+                    |                     Hyperbox B (Class 1)
                     +---------------------------------------+
 ```
 
-When a test point $x$ lands inside the overlap zone:
-- Distance to Centroid A: $D_A = \|x - C_A\|$
-- Distance to Centroid B: $D_B = \|x - C_B\|$
-- If $D_A < D_B$, Tree predicts **Class 0**. Otherwise, **Class 1**.
-
-In the upgraded engine, distance is normalized by the width of each box $(w_i - v_i)$ so rectangular boxes are not distorted.
+When a test observation $x$ falls inside overlapping hyperboxes of different classes:
+- Calculate Euclidean distance to Centroid A: $D_A = \|x - C_A\|_2$
+- Calculate Euclidean distance to Centroid B: $D_B = \|x - C_B\|_2$
+- The class associated with the nearest centroid is selected.
 
 ---
 
-## 5. From Training to Testing: The Step-by-Step Data Journey
+## 5. From Training to Testing: Step-by-Step Data Journey
 
-### Stage 1: Data Preparation
-```
-Raw Numbers [150.0, 4.2, ...] -> Min-Max Scaler -> [0.85, 0.21, ...]
-```
-All features are normalized to $[0, 1]$ because fuzzy membership operates on the unit hypercube.
+### Stage 1: Data Preprocessing
+- Check missing values and encode categorical features.
+- Scale numerical features into $[0.0, 1.0]$ using Min-Max normalization.
 
 ### Stage 2: Training Pipeline
-1. Dataset split: 80% Train ($N$ samples), 20% Test.
-2. Initialize Ensemble of $M$ trees (e.g. $M=35$).
-3. For Tree $m = 1 \dots M$:
-   - Draw $N$ instances with replacement from Train.
-   - Pick $k = \sqrt{d}$ feature columns.
-   - Run hyperbox expansion algorithm on the sampled data.
-   - Calculate centroids for all created hyperboxes.
-   - Record OOB indices for internal performance tracking.
+1. Split data into Training and Testing portions.
+2. Generate bootstrap samples until all observation IDs are covered.
+3. Train an independent FMNN model on each bootstrap sample using hyperbox expansion.
+4. Calculate and store data-based centroids for all hyperboxes.
 
-### Stage 3: Testing / Inference Pipeline
-For an unseen test point $x_{test}$:
-1. Pass $x_{test}$ to each Tree $m = 1 \dots M$:
-   - Tree $m$ isolates its assigned feature columns from $x_{test}$.
-   - **Case 1 (Inside 1 Box):** If $x_{test}$ is inside a box of Class $c$, assign Class $c$.
-   - **Case 2 (Inside Overlapping Boxes):** If inside boxes of Class 0 and Class 1, calculate distance to each box centroid. Pick the class of the closest centroid.
-   - **Case 3 (Outside All Boxes):** Calculate fuzzy membership score $b_j(x)$ to all boxes. The box with highest membership wins.
-2. Collect the output from all $M$ trees:
-   - Tree 1: Class 0
-   - Tree 2: Class 0
-   - Tree 3: Class 1
-   - ...
-3. **Voting**: Count the votes. The class with the highest total wins the final prediction.
+### Stage 3: Testing Pipeline
+For each test observation $x_{test}$:
+1. Pass $x_{test}$ to each independent FMNN model:
+   - If $x_{test}$ is inside overlapping hyperboxes of different classes -> assign class of nearest centroid.
+   - If $x_{test}$ is inside hyperbox(es) of one class -> assign that class.
+   - If $x_{test}$ is outside all hyperboxes -> compute FMNN membership $b_j(x)$ to find highest membership.
+2. Collect predictions from all models.
+3. Perform majority/plurality voting to produce final classification.
 
 ---
 
-## 6. Component Architecture Summary Table
+## 6. Architecture Component Summary
 
-| Component | What It Does | Why It Is Needed |
+| Component | Function | Role in RF-FMNN |
 | :--- | :--- | :--- |
-| **MinMaxScaler** | Scales raw values into $[0.0, 1.0]$ | FMNN membership equations require unit hypercube inputs |
-| **Bootstrap Sampler** | Generates $M$ random row bags with replacement | Prevents the ensemble from overfitting to individual training points |
-| **Subspace Selector** | Selects $k=\sqrt{d}$ feature columns randomly | Prevents hyperbox collapse in high-dimensional datasets |
-| **Hyperbox Expander** | Grows min ($V$) and max ($W$) bounds up to threshold $\theta$ | Forms interpretable rule boxes representing data clusters |
-| **Centroid Tracker** | Computes arithmetic mean of points in each box | Provides an anchor point representing the heart of the cluster |
-| **Overlap Resolver** | Compares test sample distance to candidate centroids | Resolves classification ambiguity without destructive contraction |
-| **Fuzzy Membership Engine** | Measures distance decay when outside all boxes | Ensures every test point receives a prediction, even in empty space |
-| **Ensemble Aggregator** | Combines predictions across all $M$ trees | Delivers low-variance, robust final classification |
+| **Input & Preprocessing** | Normalizes data into $[0.0, 1.0]$ | Ensures input values match FMNN unit hypercube requirements |
+| **Bootstrap Sampling Module** | Generates samples with replacement until complete ID coverage | Provides independent data subsets while ensuring all training observations contribute |
+| **Independent FMNN Classifiers** | Constructs class-labelled hyperboxes per sample | Forms independent spatial representations without cross-model interference |
+| **Hyperbox Construction & Expansion** | Expands boundaries up to size limit $\theta$ | Clusters observations without applying overlap contraction |
+| **Hyperbox Centroid Module** | Computes arithmetic mean of assigned observations | Captures the true spatial center of mass for each hyperbox |
+| **Overlap Resolution Module** | Computes Euclidean distance to candidate centroids | Resolves classification conflict in overlapping regions |
+| **Ensemble Voting Module** | Aggregates individual model predictions | Applies majority voting for final, robust classification output |

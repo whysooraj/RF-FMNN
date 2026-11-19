@@ -12,7 +12,6 @@ from sklearn.tree import DecisionTreeClassifier
 
 from src.data.dataset_loader import load_benchmark_datasets
 from src.fmnn.base_fmnn import BaseFMNN
-from src.fmnn.raw_rf_fmnn import RawRFFMNNClassifier
 from src.fmnn.rf_fmnn import RFFMNNClassifier
 from src.utils.metrics import evaluate_model
 
@@ -21,17 +20,14 @@ def run_cross_validation_benchmark(n_splits: int = 5, random_state: int = 42):
     models = {
         'Basic FMNN (Simpson 1992)': lambda: BaseFMNN(theta=0.2, gamma=1.0),
         'Decision Tree (CART)': lambda: DecisionTreeClassifier(random_state=random_state),
-        'Random Forest (Breiman)': lambda: RandomForestClassifier(n_estimators=35, random_state=random_state),
-        'Raw Proposed RF-FMNN': lambda: RawRFFMNNClassifier(theta=0.2, gamma=1.0, random_state=random_state),
-        'Upgraded RF-FMNN (Ours)': lambda: RFFMNNClassifier(
-            n_estimators=35, theta_range=(0.15, 0.35), max_features='sqrt', random_state=random_state
-        )
+        'Random Forest (Breiman)': lambda: RandomForestClassifier(n_estimators=30, random_state=random_state),
+        'Proposed RF-FMNN': lambda: RFFMNNClassifier(theta=0.2, gamma=1.0, random_state=random_state)
     }
 
     results = []
 
     print("================================================================================")
-    print("STARTING BENCHMARK: 5-Fold Stratified Cross-Validation (Upgraded Engine)")
+    print("STARTING BENCHMARK: 5-Fold Stratified Cross-Validation")
     print("================================================================================")
 
     for ds_name, ds_info in datasets.items():
@@ -67,7 +63,7 @@ def run_cross_validation_benchmark(n_splits: int = 5, random_state: int = 42):
             mean_boxes = float(np.mean(fold_boxes))
             mean_train_time = float(np.mean(fold_train_times))
 
-            print(f"  {model_name:32s} | Acc: {mean_acc*100:5.2f}% (±{std_acc*100:4.2f}%) | F1: {mean_f1*100:5.2f}% | Boxes: {mean_boxes:5.1f}")
+            print(f"  {model_name:30s} | Acc: {mean_acc*100:5.2f}% (±{std_acc*100:4.2f}%) | F1: {mean_f1*100:5.2f}% | Boxes: {mean_boxes:5.1f}")
 
             results.append({
                 'dataset': ds_name,
