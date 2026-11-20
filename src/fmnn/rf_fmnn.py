@@ -95,6 +95,18 @@ class SingleFMNN(BaseEstimator, ClassifierMixin):
         for box in self.hyperboxes:
             box.update_centroid()
 
+        # Cache NumPy matrices for vectorized, C-level fast evaluation
+        if self.hyperboxes:
+            self.V_mat = np.array([b.v for b in self.hyperboxes], dtype=np.float64)
+            self.W_mat = np.array([b.w for b in self.hyperboxes], dtype=np.float64)
+            self.centroids_mat = np.array([b.centroid for b in self.hyperboxes], dtype=np.float64)
+            self.labels_mat = np.array([b.class_label for b in self.hyperboxes], dtype=int)
+        else:
+            self.V_mat = np.empty((0, len(X[0])))
+            self.W_mat = np.empty((0, len(X[0])))
+            self.centroids_mat = np.empty((0, len(X[0])))
+            self.labels_mat = np.empty(0, dtype=int)
+
         return self
 
     def predict_sample(self, x: np.ndarray) -> int:
@@ -130,8 +142,47 @@ class SingleFMNN(BaseEstimator, ClassifierMixin):
             return best_class
 
     def predict(self, X: np.ndarray) -> np.ndarray:
+        """Vectorized batch prediction with C-speed containment and centroid resolution."""
         X = np.asarray(X, dtype=np.float64)
-        return np.array([self.predict_sample(x) for x in X])
+        if not self.hyperboxes:
+            return np.full(len(X), self.classes_[0] if self.classes_ is not None else 0)
+
+        n_samples = len(X)
+        preds = np.zeros(n_samples, dtype=int)
+        batch_size = 500
+        eps = 1e-9
+
+        for start in range(0, n_samples, batch_size):
+            end = min(n_samples, start + batch_size)
+            X_sub = X[start:end]
+
+            # Vectorized containment matrix: shape (batch_size, n_boxes)
+            in_box = np.all((X_sub[:, None, :] >= self.V_mat[None, :, :] - eps) & 
+                            (X_sub[:, None, :] <= self.W_mat[None, :, :] + eps), axis=2)
+
+            for i in range(len(X_sub)):
+                idx = start + i
+                cand = np.where(in_box[i])[0]
+
+                if len(cand) > 0:
+                    cand_labels = self.labels_mat[cand]
+                    first_lbl = cand_labels[0]
+                    if np.all(cand_labels == first_lbl):
+                        preds[idx] = first_lbl
+                    else:
+                        # Squared Euclidean distance to candidate centroids
+                        dists = np.sum((self.centroids_mat[cand] - X_sub[i]) ** 2, axis=1)
+                        preds[idx] = cand_labels[np.argmin(dists)]
+                else:
+                    # Fallback to Simpson fuzzy membership (vectorized over all boxes)
+                    diff_w = X_sub[i] - self.W_mat
+                    diff_v = self.V_mat - X_sub[i]
+                    term1 = np.maximum(0.0, 1.0 - np.maximum(0.0, self.gamma * np.minimum(1.0, diff_w)))
+                    term2 = np.maximum(0.0, 1.0 - np.maximum(0.0, self.gamma * np.minimum(1.0, diff_v)))
+                    mems = np.sum(term1 + term2, axis=1)
+                    preds[idx] = self.labels_mat[np.argmax(mems)]
+
+        return preds
 
 
 class RFFMNNClassifier(BaseEstimator, ClassifierMixin):

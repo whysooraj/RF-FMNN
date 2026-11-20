@@ -11,7 +11,7 @@ from sklearn.metrics import accuracy_score
 
 from src.fmnn.base_fmnn import BaseFMNN
 from src.fmnn.rf_fmnn import RFFMNNClassifier, SingleFMNN
-from src.fmnn.ray_rf_fmnn import RayRFFMNNClassifier, _fit_single_bag_task
+from src.fmnn.ray_rf_fmnn import RayRFFMNNClassifier, _fit_bag_chunk_task
 
 # -----------------------------------------------------------------------------
 # Partitioned BaseFMNN Worker for Ray (Data-Parallel attempt for Simpson FMNN)

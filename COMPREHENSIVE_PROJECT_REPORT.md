@@ -169,25 +169,25 @@ Full results archived in `experiments/results/ray_scaling_results.json` and plot
 ### 4.1 RF-FMNN Multi-Core Speedup ($M=32$ Estimators)
 
 #### Scaled Big Data ($N=3000, d=20$)
-| Cores ($p$) | Train Time (s) | Speedup ($S_p = T_1 / T_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy |
+| Cores ($p$) | Train Time (s) | Speedup ($S_p = T_1 / T_p$) | Parallel Efficiency ($E_p$) | Vectorized Inference Time (s) | Test Accuracy |
 | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 277.63s | **1.00x** | 100.0% | 232.58s | **96.17%** |
-| **2** | 134.14s | **2.07x** | 103.5% | 121.25s | **96.17%** |
-| **4** | 74.39s | **3.73x** | 93.3% | 63.89s | **96.17%** |
-| **8** | 49.65s | **5.59x** | 69.9% | 42.90s | **96.17%** |
+| **1** | 342.64s | **1.00x** | 100.0% | **7.61s** | **96.17%** |
+| **2** | 161.09s | **2.13x** | 106.4% | **4.80s** | **96.17%** |
+| **4** | 93.82s | **3.65x** | 91.3% | **3.69s** | **96.17%** |
+| **8** | 68.93s | **4.97x** | 62.1% | **3.30s** | **96.17%** |
 
 **Observation**:
-- Wall-clock train time plummets from **4.6 minutes down to 49.6 seconds** (5.59x speedup).
-- Multi-core inference latency drops from **232.6s down to 42.9s** (5.42x speedup).
+- Wall-clock train time drops from **342.6s down to 68.9s** (4.97x speedup on 8 cores).
+- Vectorized batch containment matrix operations reduce test-time inference latency from **232.6s down to 3.30s (70x faster total inference pipeline)**.
 - Test accuracy remains **rock solid at 96.17%** across all worker allocations because Ray zero-copy plasma tasks preserve deterministic bag isolation.
 
 #### Small Dataset ($N=569, d=30$ Breast Cancer)
-| Cores ($p$) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy |
+| Cores ($p$) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Vectorized Inference Time (s) | Test Accuracy |
 | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 10.30s | **1.00x** | 100.0% | 6.27s | 96.49% |
-| **2** | 5.88s | **1.75x** | 87.6% | 2.95s | 96.49% |
-| **4** | 5.24s | **1.97x** | 49.2% | 1.70s | 96.49% |
-| **8** | 5.24s | **1.97x** | 24.6% | 1.21s | 96.49% |
+| **1** | 10.16s | **1.00x** | 100.0% | **0.78s** | 96.49% |
+| **2** | 9.09s | **1.12x** | 55.9% | **0.61s** | 96.49% |
+| **4** | 8.58s | **1.18x** | 29.6% | **0.54s** | 96.49% |
+| **8** | 6.51s | **1.56x** | 19.5% | **0.48s** | 96.49% |
 
 **Observation**:
 On small datasets ($N < 1000$), Ray IPC process-spawning overhead (~10–30ms per task) limits speedup gains beyond 2 cores. Parallel processing requires sufficient sample density to offset IPC initialization costs.

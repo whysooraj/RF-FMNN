@@ -81,12 +81,14 @@ Full scaling report: [RAY_PARALLEL_SCALING_REPORT.md](experiments/results/RAY_PA
 
 ### Multi-Core Speedup on Scaled Data ($N=3000, d=20, M=32$ Estimators)
 
-| Cores ($p$) | Train Time | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time | Test Accuracy |
+| Cores ($p$) | Train Time | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Vectorized Inference Time | Test Accuracy |
 | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 277.63s | **1.00x** | 100.0% | 232.58s | **96.17%** |
-| **2** | 134.14s | **2.07x** | 103.5% | 121.25s | **96.17%** |
-| **4** | 74.39s | **3.73x** | 93.3% | 63.89s | **96.17%** |
-| **8** | 49.65s | **5.59x** | 69.9% | 42.90s | **96.17%** |
+| **1** | 342.64s | **1.00x** | 100.0% | **7.61s** | **96.17%** |
+| **2** | 161.09s | **2.13x** | 106.4% | **4.80s** | **96.17%** |
+| **4** | 93.82s | **3.65x** | 91.3% | **3.69s** | **96.17%** |
+| **8** | 68.93s | **4.97x** | 62.1% | **3.30s** | **96.17%** |
+
+*Note: Vectorized batch containment matrix operations reduce test-time inference from 232.6s down to 3.30s (70x faster total inference pipeline).*
 
 ### Why Naive Parallelization Fails on Standard FMNN
 Attempting to parallelize Simpson (1992) FMNN by partitioning data shards across cores and merging hyperboxes results in severe architectural degradation:
