@@ -1,7 +1,16 @@
+import os
 import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
 import ray
 from src.fmnn.rf_fmnn import SingleFMNN, _generate_bag_specs
+
+RAY_SINGLE_THREAD_ENV = {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "NUMEXPR_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1",
+}
 
 
 @ray.remote
@@ -12,10 +21,28 @@ class FMNNWorker:
     feature subsets permanently in worker RAM.
     """
     def __init__(self):
+        for key, value in RAY_SINGLE_THREAD_ENV.items():
+            os.environ[key] = value
         self.models = []
         self.feature_subsets = []
 
-    def train_bags(self, X, y, bag_specs, theta: float, gamma: float) -> int:
+    def ping(self) -> bool:
+        return True
+
+    def reset(self) -> bool:
+        self.models = []
+        self.feature_subsets = []
+        return True
+
+    def train_bags(
+        self,
+        X,
+        y,
+        bag_specs,
+        theta: float,
+        gamma: float,
+        prune: bool = False,
+    ) -> int:
         self.models = []
         self.feature_subsets = []
         total_boxes = 0
@@ -23,7 +50,7 @@ class FMNNWorker:
         for boot_idx, feat_idx in bag_specs:
             X_boot = X[boot_idx] if feat_idx is None else X[np.ix_(boot_idx, feat_idx)]
             y_boot = y[boot_idx]
-            model = SingleFMNN(theta=theta, gamma=gamma)
+            model = SingleFMNN(theta=theta, gamma=gamma, prune=prune)
             model.fit(X_boot, y_boot)
             self.models.append(model)
             self.feature_subsets.append(feat_idx)
@@ -63,6 +90,7 @@ class RayRFFMNNClassifier(BaseEstimator, ClassifierMixin):
         n_estimators: int = None,
         max_features=None,
         max_bags_limit: int = 150,
+        prune: bool = False,
         num_cpus: int = 4,
         random_state: int = 42,
     ):
@@ -71,6 +99,7 @@ class RayRFFMNNClassifier(BaseEstimator, ClassifierMixin):
         self.n_estimators = n_estimators
         self.max_features = max_features
         self.max_bags_limit = max_bags_limit
+        self.prune = prune
         self.num_cpus = num_cpus
         self.random_state = random_state
         self.workers_ = []
@@ -80,6 +109,26 @@ class RayRFFMNNClassifier(BaseEstimator, ClassifierMixin):
 
     def get_total_boxes(self) -> int:
         return int(self.total_boxes_)
+
+    def _ensure_ray(self):
+        if not ray.is_initialized():
+            # Stale handles from a previous Ray session are no longer valid
+            self.workers_ = []
+            ray.init(
+                num_cpus=self.num_cpus,
+                ignore_reinit_error=True,
+                logging_level="ERROR",
+                runtime_env={"env_vars": RAY_SINGLE_THREAD_ENV},
+            )
+
+    def warmup(self):
+        """Pre-initialize Ray and spawn a warm pool of num_cpus FMNNWorker actors."""
+        self._ensure_ray()
+        if len(self.workers_) != self.num_cpus:
+            self.close()
+            self.workers_ = [FMNNWorker.remote() for _ in range(self.num_cpus)]
+        ray.get([worker.ping.remote() for worker in self.workers_])
+        return self
 
     def close(self):
         """Kill stateful Ray worker actors and release worker RAM."""
@@ -93,8 +142,6 @@ class RayRFFMNNClassifier(BaseEstimator, ClassifierMixin):
             self.workers_ = []
 
     def fit(self, X: np.ndarray, y: np.ndarray):
-        self.close()
-
         X = np.asarray(X, dtype=np.float64)
         y = np.asarray(y)
         self.classes_ = np.unique(y)
@@ -111,24 +158,33 @@ class RayRFFMNNClassifier(BaseEstimator, ClassifierMixin):
         self.n_bags_ = len(bag_specs)
         self.total_boxes_ = 0
 
+        self._ensure_ray()
+
         if self.n_bags_ == 0:
+            if self.workers_:
+                ray.get([worker.reset.remote() for worker in self.workers_])
             return self
 
-        if not ray.is_initialized():
-            ray.init(num_cpus=self.num_cpus, ignore_reinit_error=True, logging_level="ERROR")
+        # Reuse existing warm actor pool when size matches; otherwise respawn
+        n_workers = min(self.num_cpus, self.n_bags_)
+        if not (
+            len(self.workers_) == n_workers
+            or (len(self.workers_) == self.num_cpus and self.num_cpus >= n_workers)
+        ):
+            self.close()
+            self.workers_ = [FMNNWorker.remote() for _ in range(n_workers)]
 
         # Share X and y once via zero-copy Plasma Object Store
         X_ref = ray.put(X)
         y_ref = ray.put(y)
 
         # Round-robin striping across persistent stateful worker actors
-        n_workers = min(self.num_cpus, self.n_bags_)
-        worker_bags = [bag_specs[w::n_workers] for w in range(n_workers)]
-        self.workers_ = [FMNNWorker.remote() for _ in range(n_workers)]
+        active_workers = len(self.workers_)
+        worker_bags = [bag_specs[w::active_workers] for w in range(active_workers)]
 
         # Return only integer box counts; models stay pinned in worker RAM
         box_count_futures = [
-            worker.train_bags.remote(X_ref, y_ref, bags, self.theta, self.gamma)
+            worker.train_bags.remote(X_ref, y_ref, bags, self.theta, self.gamma, self.prune)
             for worker, bags in zip(self.workers_, worker_bags)
         ]
         self.total_boxes_ = int(sum(ray.get(box_count_futures)))

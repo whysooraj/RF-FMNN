@@ -2,8 +2,14 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.pytest_cache/
 .env
-.venv
+.venv/
 env/
 venv/
+*.docx
+*.pdf
+figures/srm_seal.jpg
+figures/srmap_header_logo.png
 .DS_Store
+*.log

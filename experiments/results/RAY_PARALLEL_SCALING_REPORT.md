@@ -1,79 +1,91 @@
 # Ray Parallel Processing Benchmark: 1, 2, 4, and 8 Cores Scaling Analysis
 
-Evaluated on a 12-core Linux host comparing Standard Sequential FMNN (Simpson 1992), Naive Box-Pooling BaseFMNN, Fair Sharded Majority-Voting BaseFMNN, and Ray-Distributed Proposed RF-FMNN (with strictly train-only MinMax scaling).
+Evaluated on a 12-core Linux host comparing Vectorized Sequential FMNN (Simpson 1992), Naive Box-Pooling BaseFMNN, Fair Sharded Majority-Voting BaseFMNN, and Ray-Distributed Proposed RF-FMNN (with strictly train-only MinMax scaling, single-thread BLAS worker isolation, and pre-warmed persistent Ray actor pools).
 
 ## 1. Executive Summary
 
-- **Proposed RF-FMNN Parallel Scaling**: On `Synthetic-Scaled (N=5000, d=20)` ($M=32$ estimators), Proposed RF-FMNN reduced wall-clock training time from 14.549s (1 core) to 6.709s (8 cores), achieving **2.17x speedup** (27.1% parallel efficiency) with consistent test accuracy (94.90% at 1 core vs 94.90% at 8 cores). Across all 3 evaluated datasets, 8-core speedup ranged from 0.77x to 2.17x.
-- **Normal BaseFMNN Naive Box Pooling**: Sharding `Synthetic-Scaled (N=5000, d=20)` across 8 cores and pooling uncontracted hyperboxes achieved 7.05x speedup (28.034s to 3.978s), shifted test accuracy by -1.70 pp (92.50% to 90.80%), and expanded total hyperboxes from 1235 to 1367 (+132 boxes, 1.11x).
-- **Normal BaseFMNN Fair Sharded Majority Voting**: Training 8 independent BaseFMNN models on disjoint $N/p$ shards (500 training samples/shard vs 4000 full-dataset samples) and combining via majority vote achieved 26.84x speedup with test accuracy 91.80% (-0.70 pp vs 1-core BaseFMNN). Compared against Sharded-Voting BaseFMNN at 8 cores, Proposed RF-FMNN (using full $N$-size bootstrap bags) achieved 94.90% accuracy (+3.10 pp difference).
-- **Parallel Hyperparameter Sweep**: Evaluating 8 $\theta$ configurations in parallel reduced wall-clock sweep time from 4.808s (1 core) to 4.255s (8 cores), yielding **1.13x speedup** (14.1% efficiency).
-- **Estimator Throughput Scaling (8 Cores)**: Scaling from $M=8$ to $M=64$ estimators on `Synthetic-Scaled (N=5000, d=20)` reached **5.52 bags/sec** (11.592s wall time, 95.00% test accuracy).
+- **Proposed RF-FMNN Parallel Scaling**: On `Synthetic-Scaled (N=10000, d=20)` ($M=32$ estimators), Proposed RF-FMNN reduced steady-state wall-clock training time from 55.437s (1 core) to 15.680s (8 cores), achieving **3.54x speedup** (44.2% parallel efficiency) with consistent test accuracy (93.95% at 1 core vs 93.95% at 8 cores). Across all 3 evaluated datasets, 8-core speedup ranged from 2.68x to 4.00x.
+- **Warm Actor Pool Measurement Protocol**: Persistent Ray worker actors are pre-warmed via `clf.warmup()` prior to `fit()` timing so steady-state parallel compute scaling is measured without cold OS worker spawn overhead; separate `warmup_time_s` is reported in all scaling tables (3.102s at 1 core, 5.590s at 8 cores on `Synthetic-Scaled (N=10000, d=20)`).
+- **Normal BaseFMNN Naive Box Pooling**: Sharding `Synthetic-Scaled (N=10000, d=20)` across 8 cores and pooling uncontracted hyperboxes achieved 0.75x speedup (4.917s to 6.515s), shifted test accuracy by +0.20 pp (90.00% to 90.20%), and expanded total hyperboxes from 2325 to 2604 (+279 boxes, 1.12x).
+- **Normal BaseFMNN Fair Sharded Majority Voting**: Training 8 independent BaseFMNN models on disjoint $N/p$ shards (1000 training samples/shard vs 8000 full-dataset samples) and combining via majority vote achieved 10.47x speedup with test accuracy 90.90% (+0.90 pp vs 1-core BaseFMNN). Compared against Sharded-Voting BaseFMNN at 8 cores, Proposed RF-FMNN (using full $N$-size bootstrap bags) achieved 93.95% accuracy (+3.05 pp difference).
+- **Parallel Hyperparameter Sweep (`Digits (N=1797, d=64)`)**: Evaluating 8 $\theta$ configurations in parallel reduced wall-clock sweep time from 50.651s (1 core) to 27.030s (8 cores), yielding **1.87x speedup** (23.4% efficiency).
+- **Estimator Throughput Scaling (8 Cores)**: Scaling from $M=8$ to $M=64$ estimators on `Synthetic-Scaled (N=10000, d=20)` reached **2.54 bags/sec** (25.228s wall time, 94.35% test accuracy).
+- **Hyperbox Consolidation Pruning ($M=32$, 8 Cores)**: Enabling `prune=True` reduced total ensemble hyperboxes by **0.5% to 14.9%** across all 3 datasets with test accuracy deltas between -0.88 pp and +0.28 pp.
 
 ## 2. Proposed RF-FMNN Core Scaling: Wall-Clock Time, Speedup, and Efficiency
 
+Each run pre-warms its persistent Ray actor pool (`clf.warmup()`) under single-thread BLAS worker isolation before timing `clf.fit()`, separating one-time actor startup (`Warmup Time`) from steady-state parallel training (`Train Time`).
+
 ### Dataset: BreastCancer (N=569, d=30) ($M=32$ Estimators)
 
-| Cores ($p$) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
-| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 2.472s | **1.00x** | 100.0% | 0.188s | 96.49% | 1828 |
-| **2** | 2.479s | **1.00x** | 49.9% | 0.118s | 96.49% | 1828 |
-| **4** | 2.290s | **1.08x** | 27.0% | 0.084s | 96.49% | 1828 |
-| **8** | 3.212s | **0.77x** | 9.6% | 0.067s | 96.49% | 1828 |
+| Cores ($p$) | Warmup Time (s) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1** | 3.484s | 0.882s | **1.00x** | 100.0% | 0.248s | 96.49% | 1828 |
+| **2** | 4.405s | 0.488s | **1.81x** | 90.3% | 0.121s | 96.49% | 1828 |
+| **4** | 4.224s | 0.299s | **2.94x** | 73.6% | 0.086s | 96.49% | 1828 |
+| **8** | 6.451s | 0.329s | **2.68x** | 33.5% | 0.121s | 96.49% | 1828 |
 
 ### Dataset: Digits (N=1797, d=64) ($M=32$ Estimators)
 
-| Cores ($p$) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
-| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 4.095s | **1.00x** | 100.0% | 3.197s | 97.78% | 10059 |
-| **2** | 3.229s | **1.27x** | 63.4% | 2.339s | 97.78% | 10059 |
-| **4** | 2.903s | **1.41x** | 35.3% | 1.362s | 97.78% | 10059 |
-| **8** | 3.513s | **1.17x** | 14.6% | 1.104s | 97.78% | 10059 |
+| Cores ($p$) | Warmup Time (s) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1** | 3.368s | 3.328s | **1.00x** | 100.0% | 4.350s | 97.78% | 10059 |
+| **2** | 3.751s | 2.057s | **1.62x** | 80.9% | 2.449s | 97.78% | 10059 |
+| **4** | 4.427s | 1.207s | **2.76x** | 69.0% | 1.503s | 97.78% | 10059 |
+| **8** | 5.898s | 0.831s | **4.00x** | 50.1% | 1.332s | 97.78% | 10059 |
 
-### Dataset: Synthetic-Scaled (N=5000, d=20) ($M=32$ Estimators)
+### Dataset: Synthetic-Scaled (N=10000, d=20) ($M=32$ Estimators)
 
-| Cores ($p$) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
-| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 14.549s | **1.00x** | 100.0% | 9.281s | 94.90% | 25597 |
-| **2** | 10.290s | **1.41x** | 70.7% | 5.751s | 94.90% | 25597 |
-| **4** | 6.766s | **2.15x** | 53.8% | 3.462s | 94.90% | 25597 |
-| **8** | 6.709s | **2.17x** | 27.1% | 2.923s | 94.90% | 25597 |
+| Cores ($p$) | Warmup Time (s) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1** | 3.102s | 55.437s | **1.00x** | 100.0% | 47.325s | 93.95% | 49325 |
+| **2** | 3.567s | 31.076s | **1.78x** | 89.2% | 25.963s | 93.95% | 49325 |
+| **4** | 4.280s | 20.003s | **2.77x** | 69.3% | 17.459s | 93.95% | 49325 |
+| **8** | 5.590s | 15.680s | **3.54x** | 44.2% | 16.484s | 93.95% | 49325 |
 
-## 3. Parallelizing Normal BaseFMNN on Synthetic-Scaled (N=5000, d=20): Naive Box Pooling vs Fair Sharded Voting
+## 3. Parallelizing Normal BaseFMNN on Synthetic-Scaled (N=10000, d=20): Naive Box Pooling vs Fair Sharded Voting
 
 ### 3A. Naive Data-Partitioned Box Pooling (Cross-Shard Contraction Failure)
 
 | Cores ($p$) | Samples/Shard | Train Time (s) | Speedup ($S_p$) | Test Accuracy | Total Hyperboxes | Box Delta vs 1-Core |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 4000 | 28.034s | 1.00x | **92.50%** | 1235 | Baseline |
-| **2** | 2000 | 9.982s | 2.81x | **90.70%** | 1269 | +34 |
-| **4** | 1000 | 4.519s | 6.20x | **91.70%** | 1316 | +81 |
-| **8** | 500 | 3.978s | 7.05x | **90.80%** | 1367 | +132 |
+| **1** | 8000 | 4.917s | 1.00x | **90.00%** | 2325 | Baseline |
+| **2** | 4000 | 5.503s | 0.89x | **90.20%** | 2432 | +107 |
+| **4** | 2000 | 4.680s | 1.05x | **90.65%** | 2518 | +193 |
+| **8** | 1000 | 6.515s | 0.75x | **90.20%** | 2604 | +279 |
 
 ### 3B. Fair Sharded Majority-Voting BaseFMNN (Reduced Per-Learner Coverage $N/p$)
 
 | Cores ($p$) | Samples/Shard | Train Time (s) | Speedup ($S_p$) | Test Accuracy | Acc Delta vs 1-Core (pp) | Total Hyperboxes |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 4000 | 28.034s | 1.00x | **92.50%** | Baseline | 1235 |
-| **2** | 2000 | 8.368s | 3.35x | **89.90%** | -2.60 | 1269 |
-| **4** | 1000 | 2.677s | 10.47x | **90.70%** | -1.80 | 1316 |
-| **8** | 500 | 1.044s | 26.84x | **91.80%** | -0.70 | 1367 |
+| **1** | 8000 | 4.917s | 1.00x | **90.00%** | Baseline | 2325 |
+| **2** | 4000 | 1.633s | 3.01x | **88.85%** | -1.15 | 2432 |
+| **4** | 2000 | 0.693s | 7.09x | **90.60%** | +0.60 | 2518 |
+| **8** | 1000 | 0.470s | 10.47x | **90.90%** | +0.90 | 2604 |
 
-## 4. Parallel Hyperparameter Tuning (8 $\theta$ Configurations)
+## 4. Parallel Hyperparameter Tuning on Digits (N=1797, d=64) (8 $\theta$ Configurations)
 
 | Cores ($p$) | Grid Search Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) |
 | :---: | :---: | :---: | :---: |
-| **1** | 4.808s | **1.00x** | 100.0% |
-| **2** | 3.907s | **1.23x** | 61.5% |
-| **4** | 3.409s | **1.41x** | 35.3% |
-| **8** | 4.255s | **1.13x** | 14.1% |
+| **1** | 50.651s | **1.00x** | 100.0% |
+| **2** | 31.059s | **1.63x** | 81.5% |
+| **4** | 25.278s | **2.00x** | 50.1% |
+| **8** | 27.030s | **1.87x** | 23.4% |
 
-## 5. Estimator Scaling on 8 Cores (Synthetic-Scaled (N=5000, d=20) Throughput Analysis)
+## 5. Estimator Scaling on 8 Cores (Synthetic-Scaled (N=10000, d=20) Throughput Analysis)
 
-| Estimators ($M$) | Train Time (s) | Throughput (Bags/sec) | Test Accuracy | Total Boxes |
-| :---: | :---: | :---: | :---: | :---: |
-| **8** | 3.856s | **2.07** | 93.70% | 6372 |
-| **16** | 5.885s | **2.72** | 95.50% | 12752 |
-| **32** | 7.578s | **4.22** | 94.90% | 25597 |
-| **64** | 11.592s | **5.52** | 95.00% | 51322 |
+| Estimators ($M$) | Warmup Time (s) | Train Time (s) | Throughput (Bags/sec) | Test Accuracy | Total Boxes |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| **8** | 5.104s | 4.170s | **1.92** | 92.70% | 12276 |
+| **16** | 6.413s | 7.686s | **2.08** | 93.45% | 24628 |
+| **32** | 5.383s | 13.594s | **2.35** | 93.95% | 49325 |
+| **64** | 4.874s | 25.228s | **2.54** | 94.35% | 98785 |
+
+## 6. Hyperbox Consolidation Pruning Evaluation ($M=32$, 8 Cores)
+
+| Dataset | Unpruned Boxes | Pruned Boxes | Box Reduction (%) | Unpruned Acc | Pruned Acc | Acc Delta (pp) | Unpruned Infer (s) | Pruned Infer (s) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| BreastCancer (N=569, d=30) | 1828 | 1555 | **14.9%** | 96.49% | 95.61% | -0.88 | 0.0683s | 0.0513s |
+| Digits (N=1797, d=64) | 10059 | 9476 | **5.8%** | 97.78% | 98.06% | +0.28 | 1.0042s | 0.9492s |
+| Synthetic-Scaled (N=10000, d=20) | 49325 | 49070 | **0.5%** | 93.95% | 93.95% | +0.00 | 10.3690s | 13.3024s |
 

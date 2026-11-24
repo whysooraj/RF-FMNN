@@ -13,8 +13,39 @@ from sklearn.preprocessing import MinMaxScaler
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.fmnn.base_fmnn import BaseFMNN
-from src.fmnn.ray_rf_fmnn import RayRFFMNNClassifier
 from src.fmnn.rf_fmnn import RFFMNNClassifier
+
+try:
+    from src.fmnn.ray_rf_fmnn import RAY_SINGLE_THREAD_ENV, RayRFFMNNClassifier
+except ImportError:
+    from src.fmnn.ray_rf_fmnn import RayRFFMNNClassifier
+
+    RAY_SINGLE_THREAD_ENV = {
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1",
+    }
+
+
+def _init_ray(num_cpus: int, reset: bool = False):
+    """Initialize Ray with single-thread BLAS env vars to avoid worker oversubscription."""
+    if reset and ray.is_initialized():
+        ray.shutdown()
+    if not ray.is_initialized():
+        ray.init(
+            num_cpus=num_cpus,
+            ignore_reinit_error=True,
+            logging_level="ERROR",
+            runtime_env={"env_vars": RAY_SINGLE_THREAD_ENV},
+        )
+
+
+def _model_box_count(model) -> int:
+    if hasattr(model, "get_total_boxes"):
+        return int(model.get_total_boxes())
+    return len(model.hyperboxes)
 
 
 def _prepare_leakfree_split(X, y, test_size=0.2, random_state=42):
@@ -58,13 +89,14 @@ class PartitionedRayBaseFMNN:
         self.gamma = gamma
         self.num_cpus = num_cpus
         self.hyperboxes = []
+        self._V = None
+        self._W = None
+        self._C = None
         self.classes_ = None
 
     def fit(self, X, y):
         shards = _split_into_shards(X, y, self.num_cpus)
-
-        if not ray.is_initialized():
-            ray.init(num_cpus=self.num_cpus, ignore_reinit_error=True, logging_level="ERROR")
+        _init_ray(self.num_cpus, reset=False)
 
         futures = [
             _fit_base_fmnn_shard.remote(X_c, y_c, self.theta, self.gamma)
@@ -73,42 +105,60 @@ class PartitionedRayBaseFMNN:
         shard_models = ray.get(futures)
 
         self.hyperboxes = []
+        v_parts, w_parts, c_parts = [], [], []
         all_classes = set()
         for model in shard_models:
-            self.hyperboxes.extend(model.hyperboxes)
+            if getattr(model, "hyperboxes", None):
+                self.hyperboxes.extend(model.hyperboxes)
+                v_parts.append(np.array([b.v for b in model.hyperboxes], dtype=np.float64))
+                w_parts.append(np.array([b.w for b in model.hyperboxes], dtype=np.float64))
+                c_parts.append(np.array([b.class_label for b in model.hyperboxes]))
+            elif hasattr(model, "V_") and model.V_ is not None and len(model.V_) > 0:
+                v_parts.append(np.asarray(model.V_, dtype=np.float64))
+                w_parts.append(np.asarray(model.W_, dtype=np.float64))
+                c_parts.append(np.asarray(model.box_classes_))
             if model.classes_ is not None:
                 all_classes.update(model.classes_)
+
+        if v_parts:
+            self._V = np.vstack(v_parts)
+            self._W = np.vstack(w_parts)
+            self._C = np.concatenate(c_parts)
+        else:
+            self._V = np.empty((0, X.shape[1]), dtype=np.float64)
+            self._W = np.empty((0, X.shape[1]), dtype=np.float64)
+            self._C = np.empty((0,), dtype=int)
+
         self.classes_ = np.array(sorted(all_classes))
         return self
 
     def get_total_boxes(self):
-        return len(self.hyperboxes)
+        return int(len(self._C)) if self._C is not None else len(self.hyperboxes)
 
     def predict(self, X):
-        if not self.hyperboxes:
+        X = np.asarray(X, dtype=np.float64)
+        if self._C is None or len(self._C) == 0:
             return np.zeros(len(X), dtype=int)
 
-        preds = []
-        for x in X:
-            containing = [b for b in self.hyperboxes if b.contains(x)]
-            candidates = containing if containing else self.hyperboxes
-            best_mem = -1.0
-            best_c = candidates[0].class_label if candidates else self.classes_[0]
-            for b in candidates:
-                m = self._membership(x, b)
-                if m > best_mem:
-                    best_mem = m
-                    best_c = b.class_label
-            preds.append(best_c)
-        return np.array(preds)
+        V, W, C = self._V, self._W, self._C
+        n_dim = X.shape[1]
 
-    def _membership(self, x, box):
-        n = len(x)
-        diff_w = x - box.w
-        diff_v = box.v - x
-        term1 = np.maximum(0.0, 1.0 - np.maximum(0.0, self.gamma * np.minimum(1.0, diff_w)))
-        term2 = np.maximum(0.0, 1.0 - np.maximum(0.0, self.gamma * np.minimum(1.0, diff_v)))
-        return float(np.sum(term1 + term2) / (2.0 * n))
+        preds = np.empty(len(X), dtype=C.dtype)
+        for i, x in enumerate(X):
+            inside = np.all((x >= V - 1e-9) & (x <= W + 1e-9), axis=1)
+            if np.any(inside):
+                idx = np.flatnonzero(inside)
+                v_cand, w_cand, c_cand = V[idx], W[idx], C[idx]
+            else:
+                v_cand, w_cand, c_cand = V, W, C
+
+            diff_w = x - w_cand
+            diff_v = v_cand - x
+            term1 = np.maximum(0.0, 1.0 - np.maximum(0.0, self.gamma * np.minimum(1.0, diff_w)))
+            term2 = np.maximum(0.0, 1.0 - np.maximum(0.0, self.gamma * np.minimum(1.0, diff_v)))
+            mem = np.sum(term1 + term2, axis=1) / (2.0 * n_dim)
+            preds[i] = c_cand[int(np.argmax(mem))]
+        return preds
 
 
 class ShardedVotingRayBaseFMNN:
@@ -130,9 +180,7 @@ class ShardedVotingRayBaseFMNN:
 
     def fit(self, X, y):
         shards = _split_into_shards(X, y, self.num_cpus)
-
-        if not ray.is_initialized():
-            ray.init(num_cpus=self.num_cpus, ignore_reinit_error=True, logging_level="ERROR")
+        _init_ray(self.num_cpus, reset=False)
 
         futures = [
             _fit_base_fmnn_shard.remote(X_c, y_c, self.theta, self.gamma)
@@ -148,7 +196,7 @@ class ShardedVotingRayBaseFMNN:
         return self
 
     def get_total_boxes(self):
-        return sum(len(m.hyperboxes) for m in self.models_)
+        return sum(_model_box_count(m) for m in self.models_)
 
     def predict(self, X):
         if not self.models_:
@@ -208,9 +256,9 @@ def run_ray_scaling_experiments():
     digits = load_digits()
     X_dig_tr, X_dig_te, y_dig_tr, y_dig_te = _prepare_leakfree_split(digits.data, digits.target)
 
-    # 3. Synthetic Scaled: N=5000, d=20
+    # 3. Synthetic Scaled: N=10000, d=20
     X_syn, y_syn = make_classification(
-        n_samples=5000,
+        n_samples=10000,
         n_features=20,
         n_informative=14,
         n_classes=2,
@@ -218,10 +266,12 @@ def run_ray_scaling_experiments():
     )
     X_syn_tr, X_syn_te, y_syn_tr, y_syn_te = _prepare_leakfree_split(X_syn, y_syn)
 
-    primary_scaling_ds = "Synthetic-Scaled (N=5000, d=20)"
+    bc_ds = "BreastCancer (N=569, d=30)"
+    digits_ds = "Digits (N=1797, d=64)"
+    primary_scaling_ds = "Synthetic-Scaled (N=10000, d=20)"
     benchmark_datasets = {
-        "BreastCancer (N=569, d=30)": (X_bc_tr, X_bc_te, y_bc_tr, y_bc_te),
-        "Digits (N=1797, d=64)": (X_dig_tr, X_dig_te, y_dig_tr, y_dig_te),
+        bc_ds: (X_bc_tr, X_bc_te, y_bc_tr, y_bc_te),
+        digits_ds: (X_dig_tr, X_dig_te, y_dig_tr, y_dig_te),
         primary_scaling_ds: (X_syn_tr, X_syn_te, y_syn_tr, y_syn_te),
     }
 
@@ -230,13 +280,17 @@ def run_ray_scaling_experiments():
             "host_cpus": os.cpu_count() or 1,
             "n_estimators": n_estimators,
             "primary_dataset": primary_scaling_ds,
+            "sweep_dataset": digits_ds,
             "cores_tested": cores_to_test,
+            "warm_actor_pool": True,
+            "single_thread_blas_env": RAY_SINGLE_THREAD_ENV,
         },
         "core_scaling": {},
         "partitioned_base_fmnn": {},
         "sharded_voting_base_fmnn": {},
         "hyperparameter_sweep": {},
         "estimator_scaling": {},
+        "pruning_analysis": {},
     }
 
     # -------------------------------------------------------------------------
@@ -248,9 +302,7 @@ def run_ray_scaling_experiments():
         t1_baseline = None
 
         for c in cores_to_test:
-            if ray.is_initialized():
-                ray.shutdown()
-            ray.init(num_cpus=c, ignore_reinit_error=True, logging_level="ERROR")
+            _init_ray(c, reset=True)
 
             clf = RayRFFMNNClassifier(
                 theta=0.2,
@@ -260,6 +312,10 @@ def run_ray_scaling_experiments():
                 random_state=42,
             )
             try:
+                t_warm = time.perf_counter()
+                clf.warmup()
+                warmup_time = time.perf_counter() - t_warm
+
                 t0 = time.perf_counter()
                 clf.fit(X_tr, y_tr)
                 train_time = time.perf_counter() - t0
@@ -282,11 +338,13 @@ def run_ray_scaling_experiments():
                 efficiency = (speedup / c) * 100.0
 
             print(
-                f"Cores: {c:2d} | Train Time: {train_time:6.3f}s | Speedup: {speedup:5.2f}x | "
-                f"Efficiency: {efficiency:5.1f}% | Acc: {acc*100:.2f}% | Boxes: {total_boxes}"
+                f"Cores: {c:2d} | Warmup: {warmup_time:5.3f}s | Train Time: {train_time:6.3f}s | "
+                f"Speedup: {speedup:5.2f}x | Efficiency: {efficiency:5.1f}% | "
+                f"Acc: {acc*100:.2f}% | Boxes: {total_boxes}"
             )
 
             results["core_scaling"][dname][str(c)] = {
+                "warmup_time_s": round(warmup_time, 4),
                 "train_time_s": round(train_time, 4),
                 "speedup": round(speedup, 2),
                 "efficiency_pct": round(efficiency, 1),
@@ -305,9 +363,7 @@ def run_ray_scaling_experiments():
     t1_base = None
 
     for c in cores_to_test:
-        if ray.is_initialized():
-            ray.shutdown()
-        ray.init(num_cpus=c, ignore_reinit_error=True, logging_level="ERROR")
+        _init_ray(c, reset=True)
 
         samples_per_shard = int(len(X_tr) // c)
 
@@ -319,7 +375,7 @@ def run_ray_scaling_experiments():
             t1_base = train_time
             preds = model.predict(X_te)
             acc = accuracy_score(y_te, preds)
-            box_count = len(model.hyperboxes)
+            box_count = _model_box_count(model)
             speedup = 1.0
 
             pool_entry = {
@@ -385,18 +441,16 @@ def run_ray_scaling_experiments():
         results["sharded_voting_base_fmnn"][str(c)] = vote_entry
 
     # -------------------------------------------------------------------------
-    # PART 3: Parallel Hyperparameter Optimization (Grid Search over theta)
+    # PART 3: Parallel Hyperparameter Optimization (Grid Search over theta on Digits)
     # -------------------------------------------------------------------------
-    print("\n--- Testing Parallel Hyperparameter Tuning (8 theta candidates) ---")
+    print(f"\n--- Testing Parallel Hyperparameter Tuning on {digits_ds} (8 theta candidates) ---")
     theta_candidates = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
-    X_tr_sub, y_tr_sub = X_bc_tr, y_bc_tr
-    X_val_sub, y_val_sub = X_bc_te, y_bc_te
+    X_tr_sub, y_tr_sub = X_dig_tr, y_dig_tr
+    X_val_sub, y_val_sub = X_dig_te, y_dig_te
     t1_sweep = None
 
     for c in cores_to_test:
-        if ray.is_initialized():
-            ray.shutdown()
-        ray.init(num_cpus=c, ignore_reinit_error=True, logging_level="ERROR")
+        _init_ray(c, reset=True)
 
         t0 = time.perf_counter()
         futures = [
@@ -426,10 +480,8 @@ def run_ray_scaling_experiments():
     # -------------------------------------------------------------------------
     # PART 4: Estimator Scaling Throughput on 8 Cores (M = 8, 16, 32, 64)
     # -------------------------------------------------------------------------
-    print("\n--- Testing Estimator Depth Scaling on 8 Cores (M = 8, 16, 32, 64) ---")
-    if ray.is_initialized():
-        ray.shutdown()
-    ray.init(num_cpus=8, ignore_reinit_error=True, logging_level="ERROR")
+    print(f"\n--- Testing Estimator Depth Scaling on 8 Cores ({primary_scaling_ds}, M = 8, 16, 32, 64) ---")
+    _init_ray(8, reset=True)
 
     estimator_budgets = [8, 16, 32, 64]
     X_tr, X_te, y_tr, y_te = benchmark_datasets[primary_scaling_ds]
@@ -443,9 +495,14 @@ def run_ray_scaling_experiments():
             random_state=42,
         )
         try:
+            t_warm = time.perf_counter()
+            clf.warmup()
+            warmup_time = time.perf_counter() - t_warm
+
             t0 = time.perf_counter()
             clf.fit(X_tr, y_tr)
             t_fit = time.perf_counter() - t0
+
             throughput = m / t_fit if t_fit > 0 else 0.0
             preds = clf.predict(X_te)
             acc = accuracy_score(y_te, preds)
@@ -454,20 +511,106 @@ def run_ray_scaling_experiments():
             clf.close()
 
         print(
-            f"Estimators M: {m:2d} | Train Time: {t_fit:6.3f}s | "
+            f"Estimators M: {m:2d} | Warmup: {warmup_time:5.3f}s | Train Time: {t_fit:6.3f}s | "
             f"Throughput: {throughput:5.2f} bags/sec | Test Acc: {acc*100:5.2f}% | Boxes: {total_boxes}"
         )
         results["estimator_scaling"][str(m)] = {
+            "warmup_time_s": round(warmup_time, 4),
             "train_time_s": round(t_fit, 4),
             "throughput_bags_per_sec": round(throughput, 2),
             "accuracy": round(acc, 4),
             "total_boxes": total_boxes,
         }
 
+    # -------------------------------------------------------------------------
+    # PART 5: Hyperbox Consolidation Pruning Evaluation (prune=False vs prune=True)
+    # -------------------------------------------------------------------------
+    print(
+        f"\n--- Testing Hyperbox Consolidation Pruning on 8 Cores (M={n_estimators} estimators) ---"
+    )
+    _init_ray(8, reset=True)
+
+    for dname, (X_tr, X_te, y_tr, y_te) in benchmark_datasets.items():
+        clf_unpruned = RayRFFMNNClassifier(
+            theta=0.2,
+            gamma=1.0,
+            n_estimators=n_estimators,
+            num_cpus=8,
+            random_state=42,
+            prune=False,
+        )
+        try:
+            clf_unpruned.warmup()
+            t0 = time.perf_counter()
+            clf_unpruned.fit(X_tr, y_tr)
+            unpruned_train_time = time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            unpruned_preds = clf_unpruned.predict(X_te)
+            unpruned_infer_time = time.perf_counter() - t0
+
+            unpruned_acc = accuracy_score(y_te, unpruned_preds)
+            unpruned_boxes = int(clf_unpruned.get_total_boxes())
+        finally:
+            clf_unpruned.close()
+
+        clf_pruned = RayRFFMNNClassifier(
+            theta=0.2,
+            gamma=1.0,
+            n_estimators=n_estimators,
+            num_cpus=8,
+            random_state=42,
+            prune=True,
+        )
+        try:
+            clf_pruned.warmup()
+            t0 = time.perf_counter()
+            clf_pruned.fit(X_tr, y_tr)
+            pruned_train_time = time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            pruned_preds = clf_pruned.predict(X_te)
+            pruned_infer_time = time.perf_counter() - t0
+
+            pruned_acc = accuracy_score(y_te, pruned_preds)
+            pruned_boxes = int(clf_pruned.get_total_boxes())
+        finally:
+            clf_pruned.close()
+
+        box_reduction_pct = (
+            ((unpruned_boxes - pruned_boxes) / unpruned_boxes) * 100.0
+            if unpruned_boxes > 0
+            else 0.0
+        )
+        acc_delta_pp = (pruned_acc - unpruned_acc) * 100.0
+        infer_speedup = (
+            unpruned_infer_time / pruned_infer_time if pruned_infer_time > 0 else 0.0
+        )
+
+        print(
+            f"Pruning {dname} | Boxes: {unpruned_boxes} -> {pruned_boxes} "
+            f"(-{box_reduction_pct:.1f}%) | Acc: {unpruned_acc*100:.2f}% -> {pruned_acc*100:.2f}% "
+            f"({acc_delta_pp:+.2f} pp) | Infer: {unpruned_infer_time:.4f}s -> {pruned_infer_time:.4f}s"
+        )
+
+        results["pruning_analysis"][dname] = {
+            "unpruned_boxes": unpruned_boxes,
+            "pruned_boxes": pruned_boxes,
+            "box_reduction_pct": round(box_reduction_pct, 2),
+            "unpruned_accuracy": round(unpruned_acc, 4),
+            "pruned_accuracy": round(pruned_acc, 4),
+            "acc_delta_pp": round(acc_delta_pp, 2),
+            "unpruned_infer_time_s": round(unpruned_infer_time, 4),
+            "pruned_infer_time_s": round(pruned_infer_time, 4),
+            "infer_speedup": round(infer_speedup, 2),
+            "unpruned_train_time_s": round(unpruned_train_time, 4),
+            "pruned_train_time_s": round(pruned_train_time, 4),
+        }
+
     ray.shutdown()
 
     # -------------------------------------------------------------------------
-    # PART 5: Save JSON and Generate Markdown Report
+    # Save JSON and Generate Markdown Report
     # -------------------------------------------------------------------------
     os.makedirs("experiments/results", exist_ok=True)
     with open("experiments/results/ray_scaling_results.json", "w") as f:
@@ -485,6 +628,7 @@ def generate_markdown_report(results):
     n_est = meta.get("n_estimators", 32)
     core_scaling = results["core_scaling"]
     primary_ds = meta.get("primary_dataset", list(core_scaling.keys())[-1])
+    sweep_ds = meta.get("sweep_dataset", "Digits (N=1797, d=64)")
 
     rf_primary = core_scaling[primary_ds]
     rf_1 = rf_primary["1"]
@@ -512,6 +656,10 @@ def generate_markdown_report(results):
     est_min_k, est_max_k = est_keys[0], est_keys[-1]
     est_max = est_scaling[est_max_k]
 
+    pruning = results.get("pruning_analysis", {})
+    pruning_reductions = [p["box_reduction_pct"] for p in pruning.values()]
+    pruning_acc_deltas = [p["acc_delta_pp"] for p in pruning.values()]
+
     all_8core_speedups = [ds_data["8"]["speedup"] for ds_data in core_scaling.values()]
     min_8c_speedup = min(all_8core_speedups)
     max_8c_speedup = max(all_8core_speedups)
@@ -519,20 +667,27 @@ def generate_markdown_report(results):
     md = []
     md.append("# Ray Parallel Processing Benchmark: 1, 2, 4, and 8 Cores Scaling Analysis\n\n")
     md.append(
-        f"Evaluated on a {host_cpus}-core Linux host comparing Standard Sequential FMNN (Simpson 1992), "
+        f"Evaluated on a {host_cpus}-core Linux host comparing Vectorized Sequential FMNN (Simpson 1992), "
         f"Naive Box-Pooling BaseFMNN, Fair Sharded Majority-Voting BaseFMNN, and Ray-Distributed Proposed RF-FMNN "
-        f"(with strictly train-only MinMax scaling).\n\n"
+        f"(with strictly train-only MinMax scaling, single-thread BLAS worker isolation, and pre-warmed persistent "
+        f"Ray actor pools).\n\n"
     )
 
     md.append("## 1. Executive Summary\n\n")
     md.append(
         f"- **Proposed RF-FMNN Parallel Scaling**: On `{primary_ds}` ($M={n_est}$ estimators), "
-        f"Proposed RF-FMNN reduced wall-clock training time from {rf_1['train_time_s']:.3f}s (1 core) to "
+        f"Proposed RF-FMNN reduced steady-state wall-clock training time from {rf_1['train_time_s']:.3f}s (1 core) to "
         f"{rf_8['train_time_s']:.3f}s (8 cores), achieving **{rf_8['speedup']:.2f}x speedup** "
         f"({rf_8['efficiency_pct']:.1f}% parallel efficiency) with consistent test accuracy "
         f"({rf_1['accuracy']*100:.2f}% at 1 core vs {rf_8['accuracy']*100:.2f}% at 8 cores). "
         f"Across all {len(core_scaling)} evaluated datasets, 8-core speedup ranged from "
         f"{min_8c_speedup:.2f}x to {max_8c_speedup:.2f}x.\n"
+    )
+    md.append(
+        f"- **Warm Actor Pool Measurement Protocol**: Persistent Ray worker actors are pre-warmed via "
+        f"`clf.warmup()` prior to `fit()` timing so steady-state parallel compute scaling is measured "
+        f"without cold OS worker spawn overhead; separate `warmup_time_s` is reported in all scaling tables "
+        f"({rf_1.get('warmup_time_s', 0.0):.3f}s at 1 core, {rf_8.get('warmup_time_s', 0.0):.3f}s at 8 cores on `{primary_ds}`).\n"
     )
     md.append(
         f"- **Normal BaseFMNN Naive Box Pooling**: Sharding `{primary_ds}` across 8 cores and pooling "
@@ -551,25 +706,43 @@ def generate_markdown_report(results):
         f"({rf_vs_vote_pp:+.2f} pp difference).\n"
     )
     md.append(
-        f"- **Parallel Hyperparameter Sweep**: Evaluating 8 $\\theta$ configurations in parallel reduced "
+        f"- **Parallel Hyperparameter Sweep (`{sweep_ds}`)**: Evaluating 8 $\\theta$ configurations in parallel reduced "
         f"wall-clock sweep time from {sweep_1['sweep_time_s']:.3f}s (1 core) to {sweep_8['sweep_time_s']:.3f}s "
         f"(8 cores), yielding **{sweep_8['speedup']:.2f}x speedup** ({sweep_8['efficiency_pct']:.1f}% efficiency).\n"
     )
     md.append(
         f"- **Estimator Throughput Scaling (8 Cores)**: Scaling from $M={est_min_k}$ to $M={est_max_k}$ "
         f"estimators on `{primary_ds}` reached **{est_max['throughput_bags_per_sec']:.2f} bags/sec** "
-        f"({est_max['train_time_s']:.3f}s wall time, {est_max['accuracy']*100:.2f}% test accuracy).\n\n"
+        f"({est_max['train_time_s']:.3f}s wall time, {est_max['accuracy']*100:.2f}% test accuracy).\n"
     )
+    if pruning:
+        min_red, max_red = min(pruning_reductions), max(pruning_reductions)
+        min_acc_d, max_acc_d = min(pruning_acc_deltas), max(pruning_acc_deltas)
+        md.append(
+            f"- **Hyperbox Consolidation Pruning ($M={n_est}$, 8 Cores)**: Enabling `prune=True` reduced "
+            f"total ensemble hyperboxes by **{min_red:.1f}% to {max_red:.1f}%** across all {len(pruning)} datasets "
+            f"with test accuracy deltas between {min_acc_d:+.2f} pp and {max_acc_d:+.2f} pp.\n\n"
+        )
+    else:
+        md.append("\n")
 
     md.append("## 2. Proposed RF-FMNN Core Scaling: Wall-Clock Time, Speedup, and Efficiency\n\n")
+    md.append(
+        "Each run pre-warms its persistent Ray actor pool (`clf.warmup()`) under single-thread BLAS worker "
+        "isolation before timing `clf.fit()`, separating one-time actor startup (`Warmup Time`) from "
+        "steady-state parallel training (`Train Time`).\n\n"
+    )
     for dname, data in core_scaling.items():
         md.append(f"### Dataset: {dname} ($M={n_est}$ Estimators)\n\n")
-        md.append("| Cores ($p$) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |\n")
-        md.append("| :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n")
+        md.append(
+            "| Cores ($p$) | Warmup Time (s) | Train Time (s) | Speedup ($S_p$) | "
+            "Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |\n"
+        )
+        md.append("| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n")
         for c, m in data.items():
             md.append(
-                f"| **{c}** | {m['train_time_s']:.3f}s | **{m['speedup']:.2f}x** | "
-                f"{m['efficiency_pct']:.1f}% | {m['infer_time_s']:.3f}s | "
+                f"| **{c}** | {m.get('warmup_time_s', 0.0):.3f}s | {m['train_time_s']:.3f}s | "
+                f"**{m['speedup']:.2f}x** | {m['efficiency_pct']:.1f}% | {m['infer_time_s']:.3f}s | "
                 f"{m['accuracy']*100:.2f}% | {m['total_boxes']} |\n"
             )
         md.append("\n")
@@ -599,7 +772,7 @@ def generate_markdown_report(results):
         )
     md.append("\n")
 
-    md.append("## 4. Parallel Hyperparameter Tuning (8 $\\theta$ Configurations)\n\n")
+    md.append(f"## 4. Parallel Hyperparameter Tuning on {sweep_ds} (8 $\\theta$ Configurations)\n\n")
     md.append("| Cores ($p$) | Grid Search Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) |\n")
     md.append("| :---: | :---: | :---: | :---: |\n")
     for c, m in sweep.items():
@@ -609,14 +782,30 @@ def generate_markdown_report(results):
     md.append("\n")
 
     md.append(f"## 5. Estimator Scaling on 8 Cores ({primary_ds} Throughput Analysis)\n\n")
-    md.append("| Estimators ($M$) | Train Time (s) | Throughput (Bags/sec) | Test Accuracy | Total Boxes |\n")
-    md.append("| :---: | :---: | :---: | :---: | :---: |\n")
+    md.append("| Estimators ($M$) | Warmup Time (s) | Train Time (s) | Throughput (Bags/sec) | Test Accuracy | Total Boxes |\n")
+    md.append("| :---: | :---: | :---: | :---: | :---: | :---: |\n")
     for m_val, m in est_scaling.items():
         md.append(
-            f"| **{m_val}** | {m['train_time_s']:.3f}s | **{m['throughput_bags_per_sec']:.2f}** | "
-            f"{m['accuracy']*100:.2f}% | {m['total_boxes']} |\n"
+            f"| **{m_val}** | {m.get('warmup_time_s', 0.0):.3f}s | {m['train_time_s']:.3f}s | "
+            f"**{m['throughput_bags_per_sec']:.2f}** | {m['accuracy']*100:.2f}% | {m['total_boxes']} |\n"
         )
     md.append("\n")
+
+    if pruning:
+        md.append(f"## 6. Hyperbox Consolidation Pruning Evaluation ($M={n_est}$, 8 Cores)\n\n")
+        md.append(
+            "| Dataset | Unpruned Boxes | Pruned Boxes | Box Reduction (%) | "
+            "Unpruned Acc | Pruned Acc | Acc Delta (pp) | Unpruned Infer (s) | Pruned Infer (s) |\n"
+        )
+        md.append("| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n")
+        for dname, p in pruning.items():
+            md.append(
+                f"| {dname} | {p['unpruned_boxes']} | {p['pruned_boxes']} | "
+                f"**{p['box_reduction_pct']:.1f}%** | {p['unpruned_accuracy']*100:.2f}% | "
+                f"{p['pruned_accuracy']*100:.2f}% | {p['acc_delta_pp']:+.2f} | "
+                f"{p['unpruned_infer_time_s']:.4f}s | {p['pruned_infer_time_s']:.4f}s |\n"
+            )
+        md.append("\n")
 
     with open("experiments/results/RAY_PARALLEL_SCALING_REPORT.md", "w") as f:
         f.write("".join(md))

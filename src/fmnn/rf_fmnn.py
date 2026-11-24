@@ -109,9 +109,10 @@ class SingleFMNN(BaseEstimator, ClassifierMixin):
     - Resolves multi-class overlaps using nearest data-based hyperbox centroid.
     - Uses fuzzy membership function when observation is outside all hyperboxes.
     """
-    def __init__(self, theta: float = 0.2, gamma: float = 1.0):
+    def __init__(self, theta: float = 0.2, gamma: float = 1.0, prune: bool = False):
         self.theta = theta
         self.gamma = gamma
+        self.prune = prune
         self.hyperboxes = []
         self.classes_ = None
 
@@ -271,7 +272,96 @@ class SingleFMNN(BaseEstimator, ClassifierMixin):
                 hyperboxes[bid] = box
 
         self.hyperboxes = hyperboxes
+        if self.prune:
+            self._consolidate_boxes()
         return self
+
+    def _consolidate_boxes(self, prune_scale: float = 1.25):
+        """
+        Post-training same-class hyperbox consolidation pass.
+        Because uncontracted online expansion is monotonic, no two distinct
+        same-class boxes can satisfy union size <= d * theta at 1.0x scale;
+        relaxing the consolidation bound by prune_scale (default 1.25x theta)
+        greedily merges adjacent same-class hyperbox fragments while combining
+        sample_sum and sample_count for exact data-based centroids.
+        """
+        n_boxes = len(self.hyperboxes)
+        if n_boxes <= 1:
+            return
+
+        n_features = self.V_mat.shape[1]
+        threshold = n_features * min(1.0, self.theta * prune_scale)
+        sum_mat = np.array([b.sample_sum for b in self.hyperboxes], dtype=np.float64)
+        cnt_mat = np.array([b.sample_count for b in self.hyperboxes], dtype=np.int64)
+
+        kept_records = []
+        for c in self.classes_:
+            idx = np.flatnonzero(self.labels_mat == c)
+            k = len(idx)
+            if k == 0:
+                continue
+            V_c = self.V_mat[idx].copy()
+            W_c = self.W_mat[idx].copy()
+            sum_c = sum_mat[idx].copy()
+            cnt_c = cnt_mat[idx].copy()
+
+            if k > 1:
+                active = np.ones(k, dtype=bool)
+                for a in range(k):
+                    if not active[a]:
+                        continue
+                    while True:
+                        rem = np.flatnonzero(active[a + 1:]) + (a + 1)
+                        if len(rem) == 0:
+                            break
+                        u_v = np.minimum(V_c[a], V_c[rem])
+                        u_w = np.maximum(W_c[a], W_c[rem])
+                        sizes = np.sum(u_w - u_v, axis=1)
+                        best_local = int(np.argmin(sizes))
+                        if sizes[best_local] <= threshold:
+                            b = rem[best_local]
+                            V_c[a] = u_v[best_local]
+                            W_c[a] = u_w[best_local]
+                            sum_c[a] += sum_c[b]
+                            cnt_c[a] += cnt_c[b]
+                            active[b] = False
+                        else:
+                            break
+                surv = np.flatnonzero(active)
+            else:
+                surv = np.array([0], dtype=np.int64)
+
+            for pos in surv:
+                kept_records.append((int(idx[pos]), V_c[pos], W_c[pos], sum_c[pos], int(cnt_c[pos]), c))
+
+        # Preserve deterministic original box creation order
+        kept_records.sort(key=lambda r: r[0])
+        m = len(kept_records)
+
+        self.V_mat = np.empty((m, n_features), dtype=np.float64)
+        self.W_mat = np.empty((m, n_features), dtype=np.float64)
+        self.centroids_mat = np.empty((m, n_features), dtype=np.float64)
+        self.labels_mat = np.empty(m, dtype=self.classes_.dtype)
+        hyperboxes = []
+
+        for bid, (_, v, w, s_sum, s_cnt, c) in enumerate(kept_records):
+            centroid = (s_sum / s_cnt) if s_cnt > 0 else ((v + w) / 2.0)
+            self.V_mat[bid] = v
+            self.W_mat[bid] = w
+            self.centroids_mat[bid] = centroid
+            self.labels_mat[bid] = c
+            box = UncontractedHyperbox(
+                v=v,
+                w=w,
+                class_label=c,
+                box_id=bid,
+                sample_sum=s_sum,
+                sample_count=s_cnt,
+            )
+            box.centroid = centroid.copy()
+            hyperboxes.append(box)
+
+        self.hyperboxes = hyperboxes
 
     def predict_sample(self, x: np.ndarray) -> int:
         x = np.asarray(x, dtype=np.float64)
@@ -362,6 +452,7 @@ class RFFMNNClassifier(BaseEstimator, ClassifierMixin):
         n_estimators: int = None,
         max_features=None,
         max_bags_limit: int = 150,
+        prune: bool = False,
         random_state: int = 42,
     ):
         self.theta = theta
@@ -369,6 +460,7 @@ class RFFMNNClassifier(BaseEstimator, ClassifierMixin):
         self.n_estimators = n_estimators
         self.max_features = max_features
         self.max_bags_limit = max_bags_limit
+        self.prune = prune
         self.random_state = random_state
         self.models_ = []
         self.feature_subsets_ = []
@@ -401,7 +493,7 @@ class RFFMNNClassifier(BaseEstimator, ClassifierMixin):
         for boot_idx, feat_idx in bag_specs:
             X_boot = X[boot_idx] if feat_idx is None else X[np.ix_(boot_idx, feat_idx)]
             y_boot = y[boot_idx]
-            model = SingleFMNN(theta=self.theta, gamma=self.gamma)
+            model = SingleFMNN(theta=self.theta, gamma=self.gamma, prune=self.prune)
             model.fit(X_boot, y_boot)
             self.models_.append(model)
             self.feature_subsets_.append(all_features if feat_idx is None else feat_idx)

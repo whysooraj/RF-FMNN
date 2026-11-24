@@ -71,24 +71,27 @@ Evaluated via **5-fold stratified cross-validation** with strictly in-fold `MinM
 
 ## Ray Parallel Processing & Multi-Core Scaling
 
-Using stateful **Ray Actors** (`@ray.remote class FMNNWorker`) + zero-copy Plasma shared memory (`ray.put`), trained models remain pinned in worker RAM with zero model pickling between `fit()` and `predict()`.
+Using stateful **Ray Actors** (`@ray.remote class FMNNWorker`) + zero-copy Plasma shared memory (`ray.put`) + single-thread BLAS worker isolation (`OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`) + pre-warmed persistent actor pools (`clf.warmup()`), trained models remain pinned in worker RAM with zero model pickling between `fit()` and `predict()`.
 
-Full scaling report: [RAY_PARALLEL_SCALING_REPORT.md](experiments/results/RAY_PARALLEL_SCALING_REPORT.md).
+Full scaling & pruning report: [RAY_PARALLEL_SCALING_REPORT.md](experiments/results/RAY_PARALLEL_SCALING_REPORT.md).
 
-### Multi-Core Scaling on Synthetic-Scaled ($N=5000, d=20, M=32$ Estimators)
+### Multi-Core Scaling on Synthetic-Scaled ($N=10000, d=20, M=32$, Warm Actor Pool)
 
-| Cores ($p$) | Train Time | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time | Test Accuracy |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 14.549s | **1.00x** | 100.0% | 9.281s | **94.90%** |
-| **2** | 10.290s | **1.41x** | 70.7% | 5.751s | **94.90%** |
-| **4** | 6.766s | **2.15x** | 53.8% | 3.462s | **94.90%** |
-| **8** | **6.709s** | **2.17x** | 27.1% | **2.923s** | **94.90%** |
+| Cores ($p$) | Warmup Time | Train Time | Speedup ($S_p$) | Efficiency ($E_p$) | Inference Time | Test Accuracy |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1** | 3.102s | 55.437s | **1.00x** | 100.0% | 47.325s | **93.95%** |
+| **2** | 3.567s | 31.076s | **1.78x** | 89.2% | 25.963s | **93.95%** |
+| **4** | 4.280s | 20.003s | **2.77x** | 69.3% | 17.459s | **93.95%** |
+| **8** | 5.590s | **15.680s** | **3.54x** | 44.2% | **16.484s** | **93.95%** |
 
-### Comparison Against Parallelized Normal BaseFMNN ($N=5000, d=20$)
-- **1-Core Normal BaseFMNN**: 28.034s train time, **92.50%** accuracy, 1235 hyperboxes.
-- **8-Core Naive Box-Pooling BaseFMNN**: 3.978s, **90.80%** accuracy (-1.70 pp drop from uncontracted cross-shard collisions), 1367 hyperboxes (+10.7% box bloat).
-- **8-Core Fair Sharded-Voting BaseFMNN**: 1.044s, **91.80%** accuracy (-0.70 pp drop due to $N/8 = 500$ training samples per learner).
-- **8-Core Ray Actor RF-FMNN**: **6.709s** (**4.18x faster than 1-core BaseFMNN**), **94.90% accuracy (+2.40 pp over 1-core BaseFMNN, +3.10 pp over Sharded-Voting BaseFMNN)**.
+*On `Digits (N=1797, d=64)`, 8-core warm Ray Actors reach **4.00x speedup** (3.328s to 0.831s) and **3.27x inference speedup** (4.350s to 1.332s).*
+
+### Fair Comparison Against Vectorized Normal BaseFMNN ($N=10000, d=20$)
+Both `BaseFMNN` and `RF-FMNN` are vectorized in NumPy for apples-to-apples timing:
+- **1-Core Vectorized BaseFMNN**: 4.917s train time, **90.00%** accuracy, 2325 hyperboxes.
+- **8-Core Naive Box-Pooling BaseFMNN**: 6.515s (0.75x slowdown), **90.20%** accuracy, 2604 hyperboxes (+12.0% box bloat).
+- **8-Core Fair Sharded-Voting BaseFMNN**: 0.470s (each worker sees $N/8 = 1000$ rows), **90.90%** accuracy.
+- **8-Core Ray Actor RF-FMNN ($M=32$)**: **15.680s** (3.54x vs serial RF-FMNN), **93.95% accuracy (+3.95 pp over 1-core BaseFMNN, +3.05 pp over Sharded-Voting BaseFMNN)**; $M=64$ reaches **94.35% (+4.35 pp)** in 25.23s.
 
 ---
 

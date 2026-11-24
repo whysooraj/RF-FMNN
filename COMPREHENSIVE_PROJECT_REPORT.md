@@ -134,88 +134,97 @@ Key findings from two-sided paired t-tests across 5 CV folds ([DETAILED_METRICS_
 
 ## 4. Multi-Core Ray Actor Scaling & Speedup Analysis
 
-Evaluated on a 12-core Linux host with Ray 2.60.0 using **Stateful Ray Actors** (`FMNNWorker`), zero-copy Plasma Object Store, vectorized `SingleFMNN.fit()`/`predict()`, and strictly train-only MinMax scaling.
+Evaluated on a 12-thread Linux host (Intel hybrid 4 P-cores + 4 E-cores) with Ray 2.60.0 using **Stateful Ray Actors** (`FMNNWorker`), zero-copy Plasma Object Store, **single-thread BLAS worker isolation (`OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`)**, **pre-warmed persistent actor pools (`clf.warmup()`)**, vectorized `BaseFMNN`/`SingleFMNN`, and strictly train-only MinMax scaling.
 Full report: [RAY_PARALLEL_SCALING_REPORT.md](experiments/results/RAY_PARALLEL_SCALING_REPORT.md) | Plot: `figures/ray_multicore_scaling.png`.
 
-### 4.1 RF-FMNN Ray Actor Scaling ($M=32$ Estimators)
+### 4.1 RF-FMNN Ray Actor Scaling ($M=32$ Estimators, Warm Actor Pool)
 
-#### Synthetic-Scaled ($N=5000, d=20$)
-| Cores ($p$) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
-| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 14.549s | **1.00x** | 100.0% | 9.281s | **94.90%** | 25597 |
-| **2** | 10.290s | **1.41x** | 70.7% | 5.751s | **94.90%** | 25597 |
-| **4** | 6.766s | **2.15x** | 53.8% | 3.462s | **94.90%** | 25597 |
-| **8** | **6.709s** | **2.17x** | 27.1% | **2.923s** | **94.90%** | 25597 |
+#### Synthetic-Scaled ($N=10000, d=20$)
+| Cores ($p$) | Warmup (s) | Train Time (s) | Speedup ($S_p$) | Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1** | 3.102s | 55.437s | **1.00x** | 100.0% | 47.325s | **93.95%** | 49325 |
+| **2** | 3.567s | 31.076s | **1.78x** | 89.2% | 25.963s | **93.95%** | 49325 |
+| **4** | 4.280s | 20.003s | **2.77x** | 69.3% | 17.459s | **93.95%** | 49325 |
+| **8** | 5.590s | **15.680s** | **3.54x** | 44.2% | **16.484s** | **93.95%** | 49325 |
 
 #### Real High-Dimensional: Digits ($N=1797, d=64$)
-| Cores ($p$) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
-| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 4.095s | **1.00x** | 100.0% | 3.197s | **97.78%** | 10059 |
-| **2** | 3.229s | **1.27x** | 63.4% | 2.339s | **97.78%** | 10059 |
-| **4** | 2.903s | **1.41x** | 35.3% | 1.362s | **97.78%** | 10059 |
-| **8** | 3.513s | **1.17x** | 14.6% | **1.104s** | **97.78%** | 10059 |
+| Cores ($p$) | Warmup (s) | Train Time (s) | Speedup ($S_p$) | Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1** | 3.368s | 3.328s | **1.00x** | 100.0% | 4.350s | **97.78%** | 10059 |
+| **2** | 3.751s | 2.057s | **1.62x** | 80.9% | 2.449s | **97.78%** | 10059 |
+| **4** | 4.427s | 1.207s | **2.76x** | 69.0% | 1.503s | **97.78%** | 10059 |
+| **8** | 5.898s | **0.831s** | **4.00x** | 50.1% | **1.332s** | **97.78%** | 10059 |
 
 #### Small Dataset: BreastCancer ($N=569, d=30$)
-| Cores ($p$) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
-| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 2.472s | **1.00x** | 100.0% | 0.188s | **96.49%** | 1828 |
-| **2** | 2.479s | **1.00x** | 49.9% | 0.118s | **96.49%** | 1828 |
-| **4** | 2.290s | **1.08x** | 27.0% | 0.084s | **96.49%** | 1828 |
-| **8** | 3.212s | **0.77x** | 9.6% | **0.067s** | **96.49%** | 1828 |
+| Cores ($p$) | Warmup (s) | Train Time (s) | Speedup ($S_p$) | Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1** | 3.484s | 0.882s | **1.00x** | 100.0% | 0.248s | **96.49%** | 1828 |
+| **2** | 4.405s | 0.488s | **1.81x** | 90.3% | 0.121s | **96.49%** | 1828 |
+| **4** | 4.224s | **0.299s** | **2.94x** | 73.6% | **0.086s** | **96.49%** | 1828 |
+| **8** | 6.451s | 0.329s | **2.68x** | 33.5% | 0.121s | **96.49%** | 1828 |
 
 **Key Systems Findings**:
-- **Vectorization Breakthrough**: Vectorizing `SingleFMNN.fit()` and removing `box.samples` memory retention slashed 1-core RF-FMNN training ($M=32$) from >340s (unvectorized on $N=3000$) down to **14.55s on larger $N=5000$** — making **8-core Ray Actor RF-FMNN (6.71s) 4.18x faster than 1-core Normal BaseFMNN (28.03s)** while achieving **+2.40 pp higher test accuracy (94.90% vs 92.50%)**!
-- **Amdahl's Law & Actor Startup Floor**: Because core training is now sub-second per bag, spawning 8 fresh Ray Actor processes inside `fit()` adds a ~2.5s fixed startup floor. On small datasets (`BreastCancer`, 2.47s on 1 core), 8-core spawn cost exceeds compute savings (`0.77x`). On larger ensembles (`M=64` on `Synthetic-Scaled`), actor startup amortizes cleanly, driving throughput from **2.07 bags/sec ($M=8$) to 5.52 bags/sec ($M=64$)** in 11.59s!
-- **Zero-Pickling Inference**: Keeping models pinned inside `FMNNWorker` Actor RAM eliminates model serialization between `fit()` and `predict()`, cutting inference latency to **0.067s** on BreastCancer, **1.10s** on Digits, and **2.92s** on Synthetic-Scaled.
+- **Eliminating BLAS Thread Oversubscription**: Pinning `OMP_NUM_THREADS=1` / `OPENBLAS_NUM_THREADS=1` inside each Ray Actor plus separating one-time actor pool `warmup()` unlocked clean scaling across all 3 datasets: **4.00x on Digits (3.33s to 0.83s)**, **3.54x on Synthetic-Scaled N=10,000 (55.44s to 15.68s)**, and **2.94x on BreastCancer (0.88s to 0.30s at 4 cores)** — approaching the ~5.2x physical compute ceiling of a hybrid 4 P-core + 4 E-core CPU.
+- **Zero-Pickling Inference**: Keeping models pinned inside `FMNNWorker` Actor RAM eliminates model serialization between `fit()` and `predict()`, scaling inference to **3.27x speedup on Digits (4.35s to 1.33s)** and **2.87x on N=10,000 (47.33s to 16.48s)**.
+- **Digits Hyperparameter Sweep**: Parallel grid search over 8 $\theta$ values on `Digits` reduced sweep time from **50.65s (1 core) to 27.03s (8 cores)** (1.87x speedup; 2.00x at 4 cores).
 
-### 4.2 Estimator Depth Scaling on 8 Cores ($N=5000, d=20$)
-| Estimators ($M$) | Train Time (s) | Throughput (Bags/sec) | Test Accuracy | Total Boxes |
-| :---: | :---: | :---: | :---: | :---: |
-| **8** | 3.856s | 2.07 | 93.70% | 6372 |
-| **16** | 5.885s | 2.72 | 95.50% | 12752 |
-| **32** | 7.578s | 4.22 | 94.90% | 25597 |
-| **64** | 11.592s | **5.52** | **95.00%** | 51322 |
+### 4.2 Estimator Depth Scaling on 8 Cores ($N=10000, d=20$)
+| Estimators ($M$) | Warmup (s) | Train Time (s) | Throughput (Bags/sec) | Test Accuracy | Total Boxes |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| **8** | 5.104s | 4.170s | 1.92 | 92.70% | 12276 |
+| **16** | 6.413s | 7.686s | 2.08 | 93.45% | 24628 |
+| **32** | 5.383s | 13.594s | 2.35 | 93.95% | 49325 |
+| **64** | 4.874s | 25.228s | **2.54** | **94.35%** | 98785 |
+
+### 4.3 Hyperbox Consolidation Pruning (`prune=True`, $1.25\theta$ Merge Bound, $M=32$)
+Because uncontracted online expansion is monotonic, no two distinct same-class boxes can satisfy union size $\le d \cdot \theta$ at $1.0\times$ scale; relaxing consolidation to $1.25\theta$ merges adjacent same-class fragments while preserving exact sample-weighted centroids:
+
+| Dataset | Unpruned Boxes | Pruned Boxes | Reduction (%) | Unpruned Acc | Pruned Acc | Acc Delta | Unpruned Infer | Pruned Infer |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **BreastCancer** | 1828 | 1555 | **-14.9%** | 96.49% | 95.61% | -0.88 pp | 0.068s | 0.051s |
+| **Digits** | 10059 | 9476 | **-5.8%** | 97.78% | **98.06%** | **+0.28 pp** | 1.004s | 0.949s |
+| **Synthetic-Scaled** | 49325 | 49070 | **-0.5%** | 93.95% | 93.95% | +0.00 pp | 10.369s | 13.302s |
 
 ---
 
-## 5. Parallelizing Normal FMNN: Naive Box Pooling vs Fair Sharded Voting
+## 5. Fair Vectorized BaseFMNN Parallelization: Naive Box Pooling vs Sharded Voting
 
-Evaluated on `Synthetic-Scaled (N=5000, d=20)` (4000 train, 1000 test) comparing two ways of parallelizing Simpson (1992) BaseFMNN across $p$ cores:
+Evaluated on `Synthetic-Scaled (N=10000, d=20)` (8000 train, 2000 test) using **fairly vectorized `BaseFMNN`** (bit-for-bit identical to Simpson 1992, 13.9x faster fit / 22.4x faster predict than naive Python loops):
 
 ### 5.1 Naive Data-Partitioned Box Pooling
 | Cores ($p$) | Samples/Shard | Train Time (s) | Speedup ($S_p$) | Test Accuracy | Total Hyperboxes | Box Delta |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 4000 | 28.034s | 1.00x | **92.50%** | 1235 | Baseline |
-| **2** | 2000 | 9.982s | 2.81x | **90.70%** | 1269 | +34 |
-| **4** | 1000 | 4.519s | 6.20x | **91.70%** | 1316 | +81 |
-| **8** | 500 | 3.978s | 7.05x | **90.80%** | 1367 | +132 (+10.7%) |
+| **1** | 8000 | 4.917s | 1.00x | **90.00%** | 2325 | Baseline |
+| **2** | 4000 | 5.503s | 0.89x | **90.20%** | 2432 | +107 |
+| **4** | 2000 | 4.680s | 1.05x | **90.65%** | 2518 | +193 |
+| **8** | 1000 | 6.515s | 0.75x | **90.20%** | 2604 | +279 (+12.0%) |
 
 ### 5.2 Fair Sharded Majority-Voting BaseFMNN
 | Cores ($p$) | Samples/Shard | Train Time (s) | Speedup ($S_p$) | Test Accuracy | Acc Delta vs 1-Core | Total Hyperboxes |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 4000 | 28.034s | 1.00x | **92.50%** | Baseline | 1235 |
-| **2** | 2000 | 8.368s | 3.35x | **89.90%** | -2.60 pp | 1269 |
-| **4** | 1000 | 2.677s | 10.47x | **90.70%** | -1.80 pp | 1316 |
-| **8** | 500 | 1.044s | 26.84x | **91.80%** | -0.70 pp | 1367 |
+| **1** | 8000 | 4.917s | 1.00x | **90.00%** | Baseline | 2325 |
+| **2** | 4000 | 1.633s | 3.01x | **88.85%** | -1.15 pp | 2432 |
+| **4** | 2000 | 0.693s | 7.09x | **90.60%** | +0.60 pp | 2518 |
+| **8** | 1000 | 0.470s | 10.47x | **90.90%** | +0.90 pp | 2604 |
 
-**Architectural Takeaway**:
-- **Naive Box Pooling** fails because cross-shard overlapping boxes are never contracted, dropping accuracy by **-1.70 pp** (92.50% to 90.80%) and bloating hyperbox counts by **+10.7%** (+132 boxes).
-- **Fair Sharded Voting** avoids cross-shard collisions and runs rapidly because each worker processes only $N/p = 500$ samples, **but** reducing per-learner training data by $8\times$ degrades accuracy (-0.70 pp to -2.60 pp below 1-core BaseFMNN).
-- **Proposed RF-FMNN** trains each learner on full $N$-size bootstrap bags across Ray Actors, achieving **94.90% accuracy (+3.10 pp above Sharded-Voting BaseFMNN and +2.40 pp above 1-core BaseFMNN)** while still training **4.18x faster than 1-core BaseFMNN (6.71s vs 28.03s)**.
+**Honest Pareto Trade-Off**:
+- Once both `BaseFMNN` and `SingleFMNN` are fairly vectorized in NumPy, single-pass `BaseFMNN` trains in **4.92s** (and 8-way sharded-voting `BaseFMNN` in **0.47s** because each worker sees only $1{,}000$ rows), **but accuracy plateaus at 90.00%–90.90%** and naive box-pooling bloats hyperboxes by **+12.0%** (+279 boxes) while slowing down (0.75x).
+- **Proposed RF-FMNN** trains $M=32$ full-dataset bootstrap bags across warm Ray Actors in **15.68s** (3.54x faster than serial RF-FMNN's 55.44s), pushing test accuracy to **93.95% (+3.95 pp over 1-core BaseFMNN, +3.05 pp over 8-core Sharded-Voting BaseFMNN)** and **94.35% (+4.35 pp) at $M=64$**.
 
 ---
 
 ## 6. Honest Technical Critique & Academic Framing
 
 ### 6.1 Verified Strengths
-1. **Faster AND More Accurate Than 1-Core Normal FMNN at Scale**: On $N=5000$, 8-core Stateful Ray Actor RF-FMNN trains in **6.71s** (4.18x faster than 1-core BaseFMNN's 28.03s) and gains **+2.40 pp** accuracy (94.90% vs 92.50%).
+1. **Substantial Accuracy Gain on Large Overlapping Tabular Data**: On $N=10{,}000$ (`Synthetic-Scaled`), RF-FMNN outperforms vectorized 1-core BaseFMNN by **+3.95 pp to +4.35 pp** (93.95%–94.35% vs 90.00%) and 8-core Sharded-Voting BaseFMNN by **+3.05 pp** (93.95% vs 90.90%).
 2. **Statistically Significant High-Dimensional Performance**: On 64-dimensional `Digits`, RF-FMNN (Bagging) achieves **98.39%** accuracy, beating Random Forest (97.44%) with $p = 0.0105$. On 30-dimensional `BreastCancer`, RF-FMNN leads all models at **96.84%**.
-3. **Zero-Leakage Rigor & Clean Systems Engineering**: Strict in-fold MinMax scaling, $O(d)$ running-sum centroids, vectorized `fit()`/`predict()`, stateful Ray Actors with zero model pickling.
+3. **Clean Multi-Core Ray Actor Scaling**: Under single-thread BLAS isolation and warm actor pools, RF-FMNN achieves **4.00x speedup on Digits** (3.33s to 0.83s) and **3.54x speedup on N=10,000** (55.44s to 15.68s) with zero accuracy degradation.
+4. **Fair Engineering & Zero-Leakage Rigor**: Both `BaseFMNN` and `RF-FMNN` are vectorized in NumPy, normalization is strictly in-fold, centroids use $O(d)$ running sums, and all reports are dynamically generated from experimental JSON.
 
 ### 6.2 Honest Limitations
-1. **Accuracy Parity on Small Toy Datasets**: On `Iris`, `Wine`, `TwoMoons`, and `Circles`, differences between Basic FMNN and RF-FMNN (Bagging) are **not statistically significant** ($p > 0.10$).
-2. **Hyperbox Memory Footprint**: Storing $M=30$ bags generates $20\times\text{--}25\times$ more hyperboxes than single BaseFMNN (e.g., 9441.6 vs 408.8 on Digits). Enabling `max_features='sqrt'` cuts box count by ~40% on high-$d$ data at a modest accuracy trade-off.
-3. **Ray Actor Startup Overhead on Tiny Data**: Spawning 8 Ray Actor OS processes takes ~2.5s; parallelizing tiny datasets ($N < 1000$) yields `<1x` speedup. Use Ray Actors when $N \ge 2000$ or $M \ge 32$.
+1. **No Statistically Significant Accuracy Win Over Basic FMNN on Small Benchmarks**: Across all 6 CV datasets, paired t-tests against Basic FMNN yield $p > 0.05$ (`Digits` +0.28pp $p=0.27$, `BreastCancer` +1.05pp $p=0.28$, `Wine` -2.25pp $p=0.10$).
+2. **Hyperbox Memory Footprint**: Storing $M=30\text{--}32$ bags generates $20\times\text{--}23\times$ more hyperboxes than single BaseFMNN (e.g., 9441.6 vs 408.8 on Digits). `max_features='sqrt'` cuts box count by ~40% on high-$d$ data (but hurts 2D manifolds), and $1.25\theta$ consolidation pruning trims 5.8%–14.9% on real datasets.
+3. **Ray Actor Warmup Cost**: Spawning 8 cold Ray Actor OS processes takes ~4.9–6.5s. Ray Actors pay off cleanly for persistent services, large $N \ge 5{,}000$, or large ensemble sweeps ($M \ge 32$).
 
 ---
 
