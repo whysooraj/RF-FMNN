@@ -81,7 +81,9 @@ def evaluate_model(model, X_train, y_train, X_test, y_test):
 
     # Count hyperboxes
     total_boxes = 0
-    if hasattr(model, 'hyperboxes'):
+    if hasattr(model, 'get_total_boxes'):
+        total_boxes = model.get_total_boxes()
+    elif hasattr(model, 'hyperboxes'):
         total_boxes = len(model.hyperboxes)
     elif hasattr(model, 'models_'):
         for sub_m in model.models_:

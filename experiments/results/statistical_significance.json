@@ -1,0 +1,218 @@
+[
+  {
+    "dataset": "Iris",
+    "proposed_model": "Proposed RF-FMNN (Bagging)",
+    "baseline_model": "Basic FMNN (Simpson 1992)",
+    "mean_diff": 0.006666666666666665,
+    "t_statistic": 0.3429971702850177,
+    "p_value": 0.7488684500235265,
+    "significant": false
+  },
+  {
+    "dataset": "Iris",
+    "proposed_model": "Proposed RF-FMNN (Bagging)",
+    "baseline_model": "Random Forest (Breiman)",
+    "mean_diff": -0.01333333333333333,
+    "t_statistic": -1.0,
+    "p_value": 0.37390096630005887,
+    "significant": false
+  },
+  {
+    "dataset": "Iris",
+    "proposed_model": "Proposed RF-FMNN (Subspace sqrt)",
+    "baseline_model": "Basic FMNN (Simpson 1992)",
+    "mean_diff": 0.006666666666666665,
+    "t_statistic": 0.3429971702850177,
+    "p_value": 0.7488684500235265,
+    "significant": false
+  },
+  {
+    "dataset": "Iris",
+    "proposed_model": "Proposed RF-FMNN (Subspace sqrt)",
+    "baseline_model": "Random Forest (Breiman)",
+    "mean_diff": -0.01333333333333333,
+    "t_statistic": -1.0,
+    "p_value": 0.37390096630005887,
+    "significant": false
+  },
+  {
+    "dataset": "Wine",
+    "proposed_model": "Proposed RF-FMNN (Bagging)",
+    "baseline_model": "Basic FMNN (Simpson 1992)",
+    "mean_diff": -0.022539682539682547,
+    "t_statistic": -2.116458305039317,
+    "p_value": 0.10174715615181923,
+    "significant": false
+  },
+  {
+    "dataset": "Wine",
+    "proposed_model": "Proposed RF-FMNN (Bagging)",
+    "baseline_model": "Random Forest (Breiman)",
+    "mean_diff": -0.016666666666666673,
+    "t_statistic": -1.5,
+    "p_value": 0.208,
+    "significant": false
+  },
+  {
+    "dataset": "Wine",
+    "proposed_model": "Proposed RF-FMNN (Subspace sqrt)",
+    "baseline_model": "Basic FMNN (Simpson 1992)",
+    "mean_diff": -0.02857142857142858,
+    "t_statistic": -0.9558457879021408,
+    "p_value": 0.3932783269235421,
+    "significant": false
+  },
+  {
+    "dataset": "Wine",
+    "proposed_model": "Proposed RF-FMNN (Subspace sqrt)",
+    "baseline_model": "Random Forest (Breiman)",
+    "mean_diff": -0.022698412698412707,
+    "t_statistic": -1.363513481915391,
+    "p_value": 0.24441726448486706,
+    "significant": false
+  },
+  {
+    "dataset": "BreastCancer",
+    "proposed_model": "Proposed RF-FMNN (Bagging)",
+    "baseline_model": "Basic FMNN (Simpson 1992)",
+    "mean_diff": 0.010526315789473694,
+    "t_statistic": 1.2377054955105526,
+    "p_value": 0.28351106422764216,
+    "significant": false
+  },
+  {
+    "dataset": "BreastCancer",
+    "proposed_model": "Proposed RF-FMNN (Bagging)",
+    "baseline_model": "Random Forest (Breiman)",
+    "mean_diff": 0.019329296693060116,
+    "t_statistic": 2.273190692504827,
+    "p_value": 0.08542610589007955,
+    "significant": false
+  },
+  {
+    "dataset": "BreastCancer",
+    "proposed_model": "Proposed RF-FMNN (Subspace sqrt)",
+    "baseline_model": "Basic FMNN (Simpson 1992)",
+    "mean_diff": 0.005247632355224363,
+    "t_statistic": 0.438476350080987,
+    "p_value": 0.6836827222431712,
+    "significant": false
+  },
+  {
+    "dataset": "BreastCancer",
+    "proposed_model": "Proposed RF-FMNN (Subspace sqrt)",
+    "baseline_model": "Random Forest (Breiman)",
+    "mean_diff": 0.014050613258810785,
+    "t_statistic": 1.0899995703018348,
+    "p_value": 0.3369779217616832,
+    "significant": false
+  },
+  {
+    "dataset": "TwoMoons",
+    "proposed_model": "Proposed RF-FMNN (Bagging)",
+    "baseline_model": "Basic FMNN (Simpson 1992)",
+    "mean_diff": -0.010000000000000009,
+    "t_statistic": -1.500000000000001,
+    "p_value": 0.20799999999999966,
+    "significant": false
+  },
+  {
+    "dataset": "TwoMoons",
+    "proposed_model": "Proposed RF-FMNN (Bagging)",
+    "baseline_model": "Random Forest (Breiman)",
+    "mean_diff": 0.010000000000000009,
+    "t_statistic": 0.8846517369293837,
+    "p_value": 0.426317207940368,
+    "significant": false
+  },
+  {
+    "dataset": "TwoMoons",
+    "proposed_model": "Proposed RF-FMNN (Subspace sqrt)",
+    "baseline_model": "Basic FMNN (Simpson 1992)",
+    "mean_diff": -0.08666666666666664,
+    "t_statistic": -4.190279412931979,
+    "p_value": 0.0138034101329097,
+    "significant": true
+  },
+  {
+    "dataset": "TwoMoons",
+    "proposed_model": "Proposed RF-FMNN (Subspace sqrt)",
+    "baseline_model": "Random Forest (Breiman)",
+    "mean_diff": -0.06666666666666662,
+    "t_statistic": -2.201927530252721,
+    "p_value": 0.0924538039358127,
+    "significant": false
+  },
+  {
+    "dataset": "Circles",
+    "proposed_model": "Proposed RF-FMNN (Bagging)",
+    "baseline_model": "Basic FMNN (Simpson 1992)",
+    "mean_diff": 0.0033333333333333435,
+    "t_statistic": 0.4082482904638641,
+    "p_value": 0.7039999999999993,
+    "significant": false
+  },
+  {
+    "dataset": "Circles",
+    "proposed_model": "Proposed RF-FMNN (Bagging)",
+    "baseline_model": "Random Forest (Breiman)",
+    "mean_diff": 0.009999999999999986,
+    "t_statistic": 1.1766968108291018,
+    "p_value": 0.3045587846805356,
+    "significant": false
+  },
+  {
+    "dataset": "Circles",
+    "proposed_model": "Proposed RF-FMNN (Subspace sqrt)",
+    "baseline_model": "Basic FMNN (Simpson 1992)",
+    "mean_diff": -0.15999999999999998,
+    "t_statistic": -8.552359741197586,
+    "p_value": 0.0010261831839933244,
+    "significant": true
+  },
+  {
+    "dataset": "Circles",
+    "proposed_model": "Proposed RF-FMNN (Subspace sqrt)",
+    "baseline_model": "Random Forest (Breiman)",
+    "mean_diff": -0.15333333333333332,
+    "t_statistic": -10.694782764431382,
+    "p_value": 0.0004330766645743454,
+    "significant": true
+  },
+  {
+    "dataset": "Digits",
+    "proposed_model": "Proposed RF-FMNN (Bagging)",
+    "baseline_model": "Basic FMNN (Simpson 1992)",
+    "mean_diff": 0.0027793252862890806,
+    "t_statistic": 1.2893179467687215,
+    "p_value": 0.2667915068895814,
+    "significant": false
+  },
+  {
+    "dataset": "Digits",
+    "proposed_model": "Proposed RF-FMNN (Bagging)",
+    "baseline_model": "Random Forest (Breiman)",
+    "mean_diff": 0.009458372021046135,
+    "t_statistic": 4.545140616591686,
+    "p_value": 0.0104561496326251,
+    "significant": true
+  },
+  {
+    "dataset": "Digits",
+    "proposed_model": "Proposed RF-FMNN (Subspace sqrt)",
+    "baseline_model": "Basic FMNN (Simpson 1992)",
+    "mean_diff": -0.03671309192200558,
+    "t_statistic": -5.476666681664992,
+    "p_value": 0.005410469266215827,
+    "significant": true
+  },
+  {
+    "dataset": "Digits",
+    "proposed_model": "Proposed RF-FMNN (Subspace sqrt)",
+    "baseline_model": "Random Forest (Breiman)",
+    "mean_diff": -0.030034045187248525,
+    "t_statistic": -3.96585455991639,
+    "p_value": 0.016596123719872898,
+    "significant": true
+  }
+]

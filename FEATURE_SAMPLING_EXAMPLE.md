@@ -16,9 +16,14 @@ Obs 3       0.41        0.52        0.63        0.18             0.29     |     
 ```
 
 - **Row Sampling (Bagging):** Selecting random rows (samples) with replacement.
-- **Feature Sampling (Subspaces):** Selecting random columns (features) without replacement for each model in the ensemble.
+- **Feature Sampling (Subspaces):** Selecting random columns (features) without replacement for each base FMNN learner in the ensemble.
 
-Instead of building every classifier using all $d$ features, each classifier is given only a random subset of $k$ features.
+### Supported RF-FMNN Operating Modes
+
+The RF-FMNN implementation supports two feature-selection modes controlled via `max_features`:
+
+- **Row-bagging mode (`max_features=None`):** Each base FMNN learner uses all $d$ features. Every learner differs only in its bootstrap row sample.
+- **Feature-subspace mode (`max_features='sqrt'`):** Each base FMNN learner uses a random subset of $k = \lfloor\sqrt{d}\rfloor$ features sampled without replacement alongside its bootstrap row sample.
 
 ---
 
@@ -59,9 +64,9 @@ Alternative options:
 
 ### Why Exactly $\sqrt{d}$?
 1. **Balance between diversity and signal:**
-   - If $k$ is too small ($k=1$), a single feature does not carry enough information to separate classes (underfitting).
-   - If $k$ is too large ($k=d$), all models see the exact same dominant features, eliminating diversity (overfitting).
-   - $\sqrt{d}$ is the geometric sweet spot that minimizes the upper bound of classification error in ensemble theory.
+   - If $k$ is too small ($k=1$), a single feature does not carry enough information to separate classes (high bias / weak individual learners).
+   - If $k$ is too large ($k=d$), all learners rely on the same dominant features, increasing inter-learner correlation and limiting variance reduction.
+   - Breiman (2001) established $k = \lfloor\sqrt{d}\rfloor$ as the standard classification default that balances individual learner strength ($s$) against inter-learner correlation ($\bar{\rho}$) in the ensemble generalization error bound $PE^* \le \bar{\rho}(1 - s^2) / s^2$.
 2. **Dimension reduction for hyperboxes:**
    - For $d = 30$ features: $k = \lfloor\sqrt{30}\rfloor = 5$ features.
    - Building hyperboxes in 5 dimensions instead of 30 dimensions prevents volume collapse and keeps hyperboxes compact and interpretable.
@@ -70,22 +75,24 @@ Alternative options:
 
 ## 4. Do All Features Occur, or Are Some Missed?
 
-### Within a Single Tree:
-Yes, a single tree **deliberately misses** $(d - k)$ features. That is the entire point: each tree is intentionally constrained so it learns a unique perspective.
+### Within a Single Base Learner:
+Yes, in feature-subspace mode (`max_features='sqrt'`), a single base FMNN learner **deliberately omits** $(d - k)$ features. Each learner is intentionally constrained so it learns a distinct low-dimensional projection.
 
-### Across the Complete Ensemble of $M$ Trees:
-No feature is permanently missed. The probability that a specific feature is **never** picked in any of the $M$ trees is:
+### Across the Complete Ensemble of $M$ Learners:
+No feature is permanently missed. Because each learner samples $k$ features out of $d$ without replacement independently, the probability that a specific feature is **never** picked in any of the $M$ learners is:
 
 $$P(\text{Feature never picked}) = \left( 1 - \frac{k}{d} \right)^M$$
 
 ### Real Calculation:
-- Dataset: $d = 30$ features, $k = 5$ sampled features per tree.
-- Ensemble: $M = 35$ trees.
-- Fraction picked per tree: $5 / 30 = 16.7\%$.
-- Probability a feature is missed across all 35 trees:
-  $$P(\text{missed}) = \left(1 - \frac{5}{30}\right)^{35} = \left(\frac{5}{6}\right)^{35} \approx 0.0016 \quad (0.16\%)$$
+- Dataset: $d = 30$ features, $k = 5$ sampled features per learner (`max_features='sqrt'`).
+- Ensemble: $M = 35$ base FMNN learners.
+- Fraction picked per learner: $5 / 30 = 16.7\%$.
+- Probability a feature is missed across all 35 learners:
+  $$P(\text{missed}) = \left(1 - \frac{5}{30}\right)^{35} = \left(\frac{5}{6}\right)^{35} \approx 0.0017 \quad (0.17\%)$$
 
-Across the full ensemble, **every feature appears multiple times** (on average, each feature appears in $35 \times \frac{5}{30} \approx 5.8$ trees).
+Across the full ensemble, **every feature appears multiple times** (on average, each feature appears in $35 \times \frac{5}{30} \approx 5.8$ learners).
+
+Note on row coverage: independently of feature selection, RF-FMNN generates bootstrap bags of size $N$ (with replacement) until all $N$ training observations are covered at least once (Coupon-Collector rule). Because each bag performs $N$ draws, the expected number of **bags** required for complete coverage is $\mathbb{E}[B] \approx \ln(N) + \gamma$ (where $\gamma \approx 0.5772$ is the Euler-Mascheroni constant), corresponding to $\approx N(\ln N + \gamma)$ total individual sample draws across those bags.
 
 ---
 
@@ -94,7 +101,7 @@ Across the full ensemble, **every feature appears multiple times** (on average, 
 Let us take a concrete medical diagnostic problem: **Predicting Tumor Type (Benign = 0, Malignant = 1)**.
 
 ### Input Dataset
-- Number of features: $d = 9$ numerical measurements (normalized into $[0, 1]$):
+- Number of features: $d = 9$ numerical measurements, normalized to $[0, 1]$ using `MinMaxScaler` fitted strictly on the training fold inside cross-validation (with test points transformed using training bounds and clipped to $[0, 1]$ to prevent data leakage):
   1. $F_1$: Radius Mean
   2. $F_2$: Texture Mean
   3. $F_3$: Perimeter Mean
@@ -107,85 +114,91 @@ Let us take a concrete medical diagnostic problem: **Predicting Tumor Type (Beni
 
 ---
 
-### Step 1: Calculate $k$
-$$k = \lfloor\sqrt{9}\rfloor = 3 \text{ features per tree}$$
+### Step 1: Calculate $k$ (Feature-Subspace Mode, `max_features='sqrt'`)
+$$k = \lfloor\sqrt{9}\rfloor = 3 \text{ features per base FMNN learner}$$
 
-Every independent FMNN model will build 3-dimensional hyperboxes instead of 9-dimensional boxes.
+Every independent FMNN learner builds 3-dimensional hyperboxes instead of 9-dimensional boxes. (In row-bagging mode with `max_features=None`, every learner uses all $d = 9$ features.)
 
 ---
 
 ### Step 2: Random Feature Subspace Selection
 
-Suppose our ensemble has $M = 3$ trees for illustration:
-- **Tree 1** randomly selects 3 features: $\{F_1, F_4, F_7\}$ (Radius, Area, Concavity)
-- **Tree 2** randomly selects 3 features: $\{F_2, F_5, F_8\}$ (Texture, Smoothness, Symmetry)
-- **Tree 3** randomly selects 3 features: $\{F_3, F_6, F_9\}$ (Perimeter, Compactness, Fractal Dim)
+Suppose our ensemble has $M = 3$ base FMNN learners for illustration:
+- **Learner 1** randomly selects 3 features: $\{F_1, F_4, F_7\}$ (Radius, Area, Concavity)
+- **Learner 2** randomly selects 3 features: $\{F_2, F_5, F_8\}$ (Texture, Smoothness, Symmetry)
+- **Learner 3** randomly selects 3 features: $\{F_3, F_6, F_9\}$ (Perimeter, Compactness, Fractal Dim)
 
 Notice:
-- No tree looks at all 9 features.
+- No learner looks at all 9 features.
 - Together, all 9 features $\{F_1, \dots, F_9\}$ are fully covered.
 
 ---
 
 ### Step 3: Training Hyperboxes in Feature Subspaces
 
-#### For Tree 1:
-Tree 1 filters all training rows to keep only columns $[F_1, F_4, F_7]$.
-Suppose training sample $x = [F_1=0.20, F_4=0.15, F_7=0.10]$ arrives with **Class 0 (Benign)**:
-- Tree 1 creates 3D Hyperbox $B_1$:
+Assume maximum hyperbox size parameter $\theta = 0.2$.
+
+#### For Learner 1:
+Learner 1 filters its bootstrap training rows to keep only columns $[F_1, F_4, F_7]$.
+Suppose training sample $x_1 = [F_1=0.20, F_4=0.15, F_7=0.10]$ arrives with **Class 0 (Benign)**:
+- Learner 1 creates 3D `UncontractedHyperbox` $B_1$:
   - Min boundary: $V_1 = [0.20, 0.15, 0.10]$
   - Max boundary: $W_1 = [0.20, 0.15, 0.10]$
-  - Centroid: $C_1 = [0.20, 0.15, 0.10]$
+  - Running sum & count: `sample_sum` $= [0.20, 0.15, 0.10]$, `sample_count` $= 1$
+  - Centroid: $C_1 = \text{sample\_sum} / \text{sample\_count} = [0.20, 0.15, 0.10]$
 
 A second training sample of Class 0 arrives: $x_2 = [0.25, 0.18, 0.12]$:
-- Expansion check:
+- Expansion check ($\sum_{i=1}^k (\max(w_{1i}, x_i) - \min(v_{1i}, x_i)) \le k \cdot \theta$ with $k = 3, \theta = 0.2$):
   $$\Delta = (0.25 - 0.20) + (0.18 - 0.15) + (0.12 - 0.10) = 0.05 + 0.03 + 0.02 = 0.10 \le 3 \times 0.2 = 0.60$$
-- Fits! Box $B_1$ expands:
+- Fits! Box $B_1$ expands without contraction:
   - $V_1 = [0.20, 0.15, 0.10]$
   - $W_1 = [0.25, 0.18, 0.12]$
-  - Centroid: $C_1 = \text{mean}(x_1, x_2) = [0.225, 0.165, 0.110]$
+  - Running sum & count: `sample_sum` $= [0.45, 0.33, 0.22]$, `sample_count` $= 2$
+  - Centroid: $C_1 = \text{sample\_sum} / \text{sample\_count} = [0.225, 0.165, 0.110]$
 
-Tree 2 and Tree 3 do the same in parallel for their respective 3 features.
+Because `UncontractedHyperbox` updates `sample_sum` and `sample_count` incrementally, duplicate observations drawn in a bootstrap bag contribute according to their exact multiplicity while requiring only $O(k)$ (or $O(d)$ in full-feature mode) memory per box without retaining raw training copies.
+
+Learner 2 and Learner 3 perform the same uncontracted expansion in parallel for their respective 3-feature subspaces.
 
 ---
 
 ### Step 4: Classifying an Unseen Test Observation
 
-Now a new patient arrives with complete 9-feature reading:
+Now a new patient arrives with complete 9-feature reading (normalized using the training fold's `MinMaxScaler` and clipped to $[0, 1]$):
 $$x_{test} = [0.22, 0.65, 0.40, 0.16, 0.70, 0.35, 0.11, 0.80, 0.25]$$
 
 How does the ensemble classify this patient?
 
-#### 1. Evaluation in Tree 1:
+#### 1. Evaluation in Learner 1:
 - Extracts its assigned features $\{F_1, F_4, F_7\}$ from $x_{test}$:
   $$x_{test}^{(1)} = [0.22, 0.16, 0.11]$$
 - Check against Box $B_1$ ($V_1 = [0.20, 0.15, 0.10]$, $W_1 = [0.25, 0.18, 0.12]$):
   - $0.20 \le 0.22 \le 0.25$ (True)
   - $0.15 \le 0.16 \le 0.18$ (True)
   - $0.10 \le 0.11 \le 0.12$ (True)
-- $x_{test}^{(1)}$ is inside Box $B_1$ of Class 0!
-- **Tree 1 Vote: Class 0 (Benign)**
+- $x_{test}^{(1)}$ is inside Box $B_1$ of Class 0.
+- **Learner 1 Vote: Class 0 (Benign)**
 
-#### 2. Evaluation in Tree 2:
+#### 2. Evaluation in Learner 2:
 - Extracts its assigned features $\{F_2, F_5, F_8\}$ from $x_{test}$:
   $$x_{test}^{(2)} = [0.65, 0.70, 0.80]$$
 - Suppose $x_{test}^{(2)}$ lands inside Box $B_5$ of Class 1:
-- **Tree 2 Vote: Class 1 (Malignant)**
+- **Learner 2 Vote: Class 1 (Malignant)**
 
-#### 3. Evaluation in Tree 3:
+#### 3. Evaluation in Learner 3:
 - Extracts its assigned features $\{F_3, F_6, F_9\}$ from $x_{test}$:
   $$x_{test}^{(3)} = [0.40, 0.35, 0.25]$$
 - Suppose $x_{test}^{(3)}$ falls outside all boxes, and fuzzy membership is highest for Box $B_2$ of Class 0 ($b = 0.88$):
-- **Tree 3 Vote: Class 0 (Benign)**
+- **Learner 3 Vote: Class 0 (Benign)**
 
 ---
 
 ### Step 5: Final Ensemble Decision
 
-Collect votes from all trees:
-- Tree 1: **Class 0**
-- Tree 2: **Class 1**
-- Tree 3: **Class 0**
+Collect votes from all learners:
+- Learner 1: **Class 0**
+- Learner 2: **Class 1**
+- Learner 3: **Class 0**
 
 Tally:
 - Class 0 (Benign): **2 votes**
@@ -197,10 +210,10 @@ Tally:
 
 ## 6. Summary Comparison Table
 
-| Attribute | Full Feature Model ($k = d$) | Feature Sampling ($k = \sqrt{d}$) |
+| Attribute | Row-Bagging Mode (`max_features=None`, $k = d$) | Feature-Subspace Mode (`max_features='sqrt'`, $k = \lfloor\sqrt{d}\rfloor$) |
 | :--- | :--- | :--- |
-| **Hyperbox Dimensions** | High (e.g. 30D or 60D) | Low (e.g. 5D or 8D) |
-| **Hyperbox Volume** | Collapses to near zero ($\approx 0$) | Stays healthy and wide |
-| **Number of Boxes** | Huge (fragmentation into 1-point boxes) | Moderate (meaningful clusters) |
-| **Tree Correlation** | High (trees make identical errors) | Low (trees make independent errors) |
-| **Ensemble Accuracy** | Often lower due to noise and volume collapse | Higher and more robust across noisy datasets |
+| **Hyperbox Dimensions** | Full space (e.g. 30D or 60D) | Low-dimensional subspace (e.g. 5D or 7D) |
+| **Hyperbox Volume** | Collapses toward zero in high dimensions ($\approx 0$) | Stays compact and well-populated |
+| **Number of Boxes** | Large in high dimensions (fragmentation into near-singleton boxes) | Moderate (meaningful cluster boxes) |
+| **Learner Correlation** | Higher (learners share identical feature axes) | Lower (learners make decorrelated errors) |
+| **Best Use Case** | Low-dimensional datasets where every feature carries essential signal | Medium-to-high-dimensional or noisy datasets prone to volume collapse |

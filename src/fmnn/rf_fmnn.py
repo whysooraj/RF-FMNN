@@ -1,30 +1,99 @@
 import numpy as np
-from collections import Counter
 from sklearn.base import BaseEstimator, ClassifierMixin
+
+
+def _resolve_max_features(max_features, n_features: int) -> int:
+    """Resolve max_features specification into an integer subspace size k in [1, n_features]."""
+    if max_features is None:
+        return n_features
+    if max_features == 'sqrt':
+        return max(1, int(np.floor(np.sqrt(n_features))))
+    if max_features == 'log2':
+        return max(1, int(np.floor(np.log2(n_features))))
+    if isinstance(max_features, (int, np.integer)) and not isinstance(max_features, bool):
+        if max_features < 1 or max_features > n_features:
+            raise ValueError(f"max_features={max_features} must be in [1, {n_features}]")
+        return int(max_features)
+    if isinstance(max_features, float):
+        if not (0.0 < max_features <= 1.0):
+            raise ValueError(f"float max_features={max_features} must be in (0.0, 1.0]")
+        return max(1, int(np.floor(max_features * n_features)))
+    raise ValueError(f"Unsupported max_features: {max_features!r}")
+
+
+def _generate_bag_specs(
+    n_samples: int,
+    n_features: int,
+    n_estimators: int,
+    max_features,
+    max_bags_limit: int,
+    random_state: int,
+):
+    """
+    Generate deterministic (boot_idx, feat_idx) specifications for RF-FMNN bags.
+    Uses n_estimators bags when provided; otherwise draws bootstrap samples
+    until 100% row coverage or max_bags_limit (coupon-collector rule).
+    """
+    rng = np.random.RandomState(random_state)
+    k = _resolve_max_features(max_features, n_features)
+    use_subspace = k < n_features
+
+    bag_specs = []
+    if n_estimators is not None:
+        for _ in range(n_estimators):
+            boot_idx = rng.choice(n_samples, size=n_samples, replace=True)
+            feat_idx = np.sort(rng.choice(n_features, size=k, replace=False)) if use_subspace else None
+            bag_specs.append((boot_idx, feat_idx))
+    else:
+        covered = np.zeros(n_samples, dtype=bool)
+        covered_count = 0
+        while covered_count < n_samples and len(bag_specs) < max_bags_limit:
+            boot_idx = rng.choice(n_samples, size=n_samples, replace=True)
+            covered[boot_idx] = True
+            covered_count = int(covered.sum())
+            feat_idx = np.sort(rng.choice(n_features, size=k, replace=False)) if use_subspace else None
+            bag_specs.append((boot_idx, feat_idx))
+
+    return bag_specs
+
 
 class UncontractedHyperbox:
     """
     Hyperbox for RF-FMNN.
     Constructed and expanded without overlap contraction.
-    Maintains assigned training observations and computes arithmetic centroid
-    taking bootstrap sample multiplicity into account.
+    Tracks running sum and sample count in O(d) memory to compute exact
+    arithmetic centroids taking bootstrap sample multiplicity into account.
     """
-    def __init__(self, v: np.ndarray, w: np.ndarray, class_label: int, box_id: int):
+    def __init__(
+        self,
+        v: np.ndarray,
+        w: np.ndarray,
+        class_label: int,
+        box_id: int,
+        sample_sum: np.ndarray = None,
+        sample_count: int = 0,
+    ):
         self.v = np.array(v, dtype=np.float64)  # Min boundary vector
         self.w = np.array(w, dtype=np.float64)  # Max boundary vector
         self.class_label = class_label
         self.box_id = box_id
-        self.samples = []
+        self.sample_sum = (
+            np.zeros_like(self.v, dtype=np.float64)
+            if sample_sum is None
+            else np.array(sample_sum, dtype=np.float64)
+        )
+        self.sample_count = int(sample_count)
         self.centroid = np.copy(self.v)
 
     def add_sample(self, x: np.ndarray):
         """Add training observation. Repetitions are counted according to multiplicity."""
-        self.samples.append(np.array(x, dtype=np.float64))
+        self.sample_sum += np.asarray(x, dtype=np.float64)
+        self.sample_count += 1
 
     def update_centroid(self):
         """Centroid calculated as arithmetic mean of all assigned training observations."""
-        if len(self.samples) > 0:
-            self.centroid = np.mean(self.samples, axis=0)
+        if self.sample_count > 0:
+            self.centroid = self.sample_sum / self.sample_count
         else:
             self.centroid = (self.v + self.w) / 2.0
 
@@ -45,6 +114,9 @@ class SingleFMNN(BaseEstimator, ClassifierMixin):
         self.gamma = gamma
         self.hyperboxes = []
         self.classes_ = None
+
+    def get_total_boxes(self) -> int:
+        return len(self.hyperboxes)
 
     def membership(self, x: np.ndarray, box: UncontractedHyperbox) -> float:
         """
@@ -70,86 +142,157 @@ class SingleFMNN(BaseEstimator, ClassifierMixin):
         y = np.asarray(y)
         self.classes_ = np.unique(y)
         self.hyperboxes = []
+
+        n_samples = len(X)
+        n_features = X.shape[1] if X.ndim == 2 else 0
+        if n_samples == 0:
+            self.V_mat = np.empty((0, n_features), dtype=np.float64)
+            self.W_mat = np.empty((0, n_features), dtype=np.float64)
+            self.centroids_mat = np.empty((0, n_features), dtype=np.float64)
+            self.labels_mat = np.empty(0, dtype=self.classes_.dtype if len(self.classes_) else int)
+            return self
+
+        gamma = self.gamma
+        threshold = n_features * self.theta
+        init_cap = 16
         box_counter = 0
 
-        for x, c in zip(X, y):
-            expanded = False
-            candidate_boxes = [b for b in self.hyperboxes if b.class_label == c]
-            if candidate_boxes:
-                candidate_boxes.sort(key=lambda b: self.membership(x, b), reverse=True)
-                for box in candidate_boxes:
-                    if self._expansion_criterion(x, box):
-                        box.v = np.minimum(box.v, x)
-                        box.w = np.maximum(box.w, x)
-                        box.add_sample(x)
-                        expanded = True
-                        break
+        # Per-class dynamic arrays: [V_arr, W_arr, sum_arr, cnt_arr, id_arr, count, cap]
+        class_state = {}
 
-            if not expanded:
-                new_box = UncontractedHyperbox(v=x, w=x, class_label=c, box_id=box_counter)
-                new_box.add_sample(x)
+        for i in range(n_samples):
+            x = X[i]
+            c = y[i]
+            state = class_state.get(c)
+
+            if state is None:
+                V_arr = np.empty((init_cap, n_features), dtype=np.float64)
+                W_arr = np.empty((init_cap, n_features), dtype=np.float64)
+                sum_arr = np.empty((init_cap, n_features), dtype=np.float64)
+                cnt_arr = np.empty(init_cap, dtype=np.int64)
+                id_arr = np.empty(init_cap, dtype=np.int64)
+                V_arr[0] = x
+                W_arr[0] = x
+                sum_arr[0] = x
+                cnt_arr[0] = 1
+                id_arr[0] = box_counter
                 box_counter += 1
-                self.hyperboxes.append(new_box)
+                class_state[c] = [V_arr, W_arr, sum_arr, cnt_arr, id_arr, 1, init_cap]
+                continue
 
-        # Calculate centroids for all constructed hyperboxes
-        for box in self.hyperboxes:
-            box.update_centroid()
+            V_arr, W_arr, sum_arr, cnt_arr, id_arr, k, cap = state
+            V_c = V_arr[:k]
+            W_c = W_arr[:k]
 
-        # Cache NumPy matrices for vectorized, C-level fast evaluation
-        if self.hyperboxes:
-            self.V_mat = np.array([b.v for b in self.hyperboxes], dtype=np.float64)
-            self.W_mat = np.array([b.w for b in self.hyperboxes], dtype=np.float64)
-            self.centroids_mat = np.array([b.centroid for b in self.hyperboxes], dtype=np.float64)
-            self.labels_mat = np.array([b.class_label for b in self.hyperboxes], dtype=int)
-        else:
-            self.V_mat = np.empty((0, len(X[0])))
-            self.W_mat = np.empty((0, len(X[0])))
-            self.centroids_mat = np.empty((0, len(X[0])))
-            self.labels_mat = np.empty(0, dtype=int)
+            # Vectorized Simpson membership across all k boxes of class c (omit 1/(2d) constant)
+            diff_w = x - W_c
+            diff_v = V_c - x
+            term1 = np.maximum(0.0, 1.0 - np.maximum(0.0, gamma * np.minimum(1.0, diff_w)))
+            term2 = np.maximum(0.0, 1.0 - np.maximum(0.0, gamma * np.minimum(1.0, diff_v)))
+            mems = np.sum(term1 + term2, axis=1)
 
+            # Fast path: check highest-membership box first; otherwise vectorized eligibility scan
+            best = int(np.argmax(mems))
+            if float(np.sum(np.maximum(W_c[best], x) - np.minimum(V_c[best], x))) <= threshold:
+                expand_idx = best
+            else:
+                eligible = np.sum(np.maximum(W_c, x) - np.minimum(V_c, x), axis=1) <= threshold
+                if np.any(eligible):
+                    # Exact equivalent to scanning np.argsort(-mems, kind='stable') for first eligible
+                    expand_idx = int(np.argmax(np.where(eligible, mems, -1.0)))
+                else:
+                    expand_idx = -1
+
+            if expand_idx >= 0:
+                np.minimum(V_arr[expand_idx], x, out=V_arr[expand_idx])
+                np.maximum(W_arr[expand_idx], x, out=W_arr[expand_idx])
+                sum_arr[expand_idx] += x
+                cnt_arr[expand_idx] += 1
+            else:
+                if k == cap:
+                    new_cap = cap * 2
+                    new_V = np.empty((new_cap, n_features), dtype=np.float64)
+                    new_W = np.empty((new_cap, n_features), dtype=np.float64)
+                    new_sum = np.empty((new_cap, n_features), dtype=np.float64)
+                    new_cnt = np.empty(new_cap, dtype=np.int64)
+                    new_id = np.empty(new_cap, dtype=np.int64)
+                    new_V[:k] = V_arr
+                    new_W[:k] = W_arr
+                    new_sum[:k] = sum_arr
+                    new_cnt[:k] = cnt_arr
+                    new_id[:k] = id_arr
+                    V_arr, W_arr, sum_arr, cnt_arr, id_arr, cap = (
+                        new_V, new_W, new_sum, new_cnt, new_id, new_cap
+                    )
+                    state[0], state[1], state[2], state[3], state[4], state[6] = (
+                        V_arr, W_arr, sum_arr, cnt_arr, id_arr, cap
+                    )
+                V_arr[k] = x
+                W_arr[k] = x
+                sum_arr[k] = x
+                cnt_arr[k] = 1
+                id_arr[k] = box_counter
+                box_counter += 1
+                state[5] = k + 1
+
+        # Build UncontractedHyperbox list (no raw samples list) and vectorized prediction matrices
+        total_boxes = box_counter
+        self.V_mat = np.empty((total_boxes, n_features), dtype=np.float64)
+        self.W_mat = np.empty((total_boxes, n_features), dtype=np.float64)
+        self.centroids_mat = np.empty((total_boxes, n_features), dtype=np.float64)
+        self.labels_mat = np.empty(total_boxes, dtype=self.classes_.dtype)
+        hyperboxes = [None] * total_boxes
+
+        for c, state in class_state.items():
+            k = state[5]
+            V_c = state[0][:k]
+            W_c = state[1][:k]
+            sum_c = state[2][:k]
+            cnt_c = state[3][:k]
+            ids_c = state[4][:k]
+            centroids_c = sum_c / cnt_c[:, None]
+
+            self.V_mat[ids_c] = V_c
+            self.W_mat[ids_c] = W_c
+            self.centroids_mat[ids_c] = centroids_c
+            self.labels_mat[ids_c] = c
+
+            for j in range(k):
+                bid = int(ids_c[j])
+                box = UncontractedHyperbox(
+                    v=V_c[j],
+                    w=W_c[j],
+                    class_label=c,
+                    box_id=bid,
+                    sample_sum=sum_c[j],
+                    sample_count=int(cnt_c[j]),
+                )
+                box.centroid = centroids_c[j].copy()
+                hyperboxes[bid] = box
+
+        self.hyperboxes = hyperboxes
         return self
 
     def predict_sample(self, x: np.ndarray) -> int:
+        x = np.asarray(x, dtype=np.float64)
         if not self.hyperboxes:
             return self.classes_[0]
-
-        # Step 7: Check containing hyperboxes
-        containing_boxes = [b for b in self.hyperboxes if b.contains(x)]
-
-        if containing_boxes:
-            contained_classes = set(b.class_label for b in containing_boxes)
-            if len(contained_classes) == 1:
-                return next(iter(contained_classes))
-            else:
-                # Overlap between different classes: resolve using nearest data-based centroid
-                best_dist = float('inf')
-                best_class = None
-                for b in containing_boxes:
-                    dist = float(np.linalg.norm(x - b.centroid))
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_class = b.class_label
-                return best_class
-        else:
-            # Step 8: Outside all hyperboxes -> use FMNN membership function
-            best_membership = -1.0
-            best_class = None
-            for box in self.hyperboxes:
-                mem = self.membership(x, box)
-                if mem > best_membership:
-                    best_membership = mem
-                    best_class = box.class_label
-            return best_class
+        return self.predict(x.reshape(1, -1))[0]
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        """Vectorized batch prediction with C-speed containment and centroid resolution."""
+        """Vectorized batch prediction with containment, centroid resolution, and deterministic tie-breaking."""
         X = np.asarray(X, dtype=np.float64)
-        if not self.hyperboxes:
-            return np.full(len(X), self.classes_[0] if self.classes_ is not None else 0)
-
         n_samples = len(X)
-        preds = np.zeros(n_samples, dtype=int)
-        batch_size = 500
+        out_dtype = self.classes_.dtype if (self.classes_ is not None and len(self.classes_) > 0) else int
+
+        if n_samples == 0:
+            return np.empty(0, dtype=out_dtype)
+        if not self.hyperboxes:
+            return np.full(n_samples, self.classes_[0] if self.classes_ is not None else 0, dtype=out_dtype)
+
+        preds = np.empty(n_samples, dtype=out_dtype)
+        n_boxes, n_features = self.V_mat.shape
+        batch_size = max(1, min(500, 2_000_000 // max(1, n_boxes * n_features)))
         eps = 1e-9
 
         for start in range(0, n_samples, batch_size):
@@ -157,8 +300,11 @@ class SingleFMNN(BaseEstimator, ClassifierMixin):
             X_sub = X[start:end]
 
             # Vectorized containment matrix: shape (batch_size, n_boxes)
-            in_box = np.all((X_sub[:, None, :] >= self.V_mat[None, :, :] - eps) & 
-                            (X_sub[:, None, :] <= self.W_mat[None, :, :] + eps), axis=2)
+            in_box = np.all(
+                (X_sub[:, None, :] >= self.V_mat[None, :, :] - eps)
+                & (X_sub[:, None, :] <= self.W_mat[None, :, :] + eps),
+                axis=2,
+            )
 
             for i in range(len(X_sub)):
                 idx = start + i
@@ -170,9 +316,11 @@ class SingleFMNN(BaseEstimator, ClassifierMixin):
                     if np.all(cand_labels == first_lbl):
                         preds[idx] = first_lbl
                     else:
-                        # Squared Euclidean distance to candidate centroids
+                        # Squared Euclidean distance to candidate centroids;
+                        # deterministic tie-break by smallest class label
                         dists = np.sum((self.centroids_mat[cand] - X_sub[i]) ** 2, axis=1)
-                        preds[idx] = cand_labels[np.argmin(dists)]
+                        best_pos = int(np.lexsort((cand_labels, dists))[0])
+                        preds[idx] = cand_labels[best_pos]
                 else:
                     # Fallback to Simpson fuzzy membership (vectorized over all boxes)
                     diff_w = X_sub[i] - self.W_mat
@@ -180,7 +328,16 @@ class SingleFMNN(BaseEstimator, ClassifierMixin):
                     term1 = np.maximum(0.0, 1.0 - np.maximum(0.0, self.gamma * np.minimum(1.0, diff_w)))
                     term2 = np.maximum(0.0, 1.0 - np.maximum(0.0, self.gamma * np.minimum(1.0, diff_v)))
                     mems = np.sum(term1 + term2, axis=1)
-                    preds[idx] = self.labels_mat[np.argmax(mems)]
+                    max_mem = np.max(mems)
+                    tied = np.where(mems >= max_mem - 1e-12)[0]
+                    if len(tied) == 1:
+                        preds[idx] = self.labels_mat[tied[0]]
+                    else:
+                        # Handle ties (including out-of-range saturation) via nearest centroid, then label
+                        dists = np.sum((self.centroids_mat[tied] - X_sub[i]) ** 2, axis=1)
+                        tied_labels = self.labels_mat[tied]
+                        best_pos = int(np.lexsort((tied_labels, dists))[0])
+                        preds[idx] = tied_labels[best_pos]
 
         return preds
 
@@ -188,72 +345,96 @@ class SingleFMNN(BaseEstimator, ClassifierMixin):
 class RFFMNNClassifier(BaseEstimator, ClassifierMixin):
     """
     Random-Sampling-Based Fuzzy Min-Max Neural Network Ensemble (RF-FMNN).
-    
-    Combines multiple independent FMNN models using bootstrap random sampling
-    and ensemble majority/plurality voting.
-    
-    Bootstrap samples are generated until the union of unique observation IDs
-    covers the complete training dataset.
-    Hyperboxes are constructed without contraction; overlapping regions
-    are resolved via nearest data-based centroids.
+
+    Combines multiple independent FMNN models using bootstrap random sampling,
+    optional random feature subspaces (max_features), and deterministic
+    majority/plurality voting.
+
+    When n_estimators is None, bootstrap samples are generated until the union
+    of unique observation IDs covers the complete training dataset (up to
+    max_bags_limit). Hyperboxes are constructed without contraction; overlapping
+    regions are resolved via nearest data-based centroids.
     """
-    def __init__(self, theta: float = 0.2, gamma: float = 1.0, max_bags_limit: int = 150, random_state: int = 42):
+    def __init__(
+        self,
+        theta: float = 0.2,
+        gamma: float = 1.0,
+        n_estimators: int = None,
+        max_features=None,
+        max_bags_limit: int = 150,
+        random_state: int = 42,
+    ):
         self.theta = theta
         self.gamma = gamma
+        self.n_estimators = n_estimators
+        self.max_features = max_features
         self.max_bags_limit = max_bags_limit
         self.random_state = random_state
         self.models_ = []
+        self.feature_subsets_ = []
         self.classes_ = None
         self.n_bags_ = 0
+
+    def get_total_boxes(self) -> int:
+        return sum(len(m.hyperboxes) for m in self.models_)
 
     def fit(self, X: np.ndarray, y: np.ndarray):
         X = np.asarray(X, dtype=np.float64)
         y = np.asarray(y)
         self.classes_ = np.unique(y)
-        n_samples = len(X)
-        rng = np.random.RandomState(self.random_state)
+        n_samples, n_features = X.shape
 
-        # Step 4: Bootstrap random sampling with replacement until complete coverage
-        covered_ids = set()
-        bootstrap_bags = []
+        bag_specs = _generate_bag_specs(
+            n_samples=n_samples,
+            n_features=n_features,
+            n_estimators=self.n_estimators,
+            max_features=self.max_features,
+            max_bags_limit=self.max_bags_limit,
+            random_state=self.random_state,
+        )
 
-        while len(covered_ids) < n_samples and len(bootstrap_bags) < self.max_bags_limit:
-            boot_idx = rng.choice(n_samples, size=n_samples, replace=True)
-            covered_ids.update(boot_idx)
-            bootstrap_bags.append(boot_idx)
-
-        self.n_bags_ = len(bootstrap_bags)
+        self.n_bags_ = len(bag_specs)
         self.models_ = []
+        self.feature_subsets_ = []
+        all_features = np.arange(n_features)
 
-        # Step 5 & 6: Train independent FMNN models on each bootstrap sample
-        for boot_idx in bootstrap_bags:
-            X_boot = X[boot_idx]
+        for boot_idx, feat_idx in bag_specs:
+            X_boot = X[boot_idx] if feat_idx is None else X[np.ix_(boot_idx, feat_idx)]
             y_boot = y[boot_idx]
             model = SingleFMNN(theta=self.theta, gamma=self.gamma)
             model.fit(X_boot, y_boot)
             self.models_.append(model)
+            self.feature_subsets_.append(all_features if feat_idx is None else feat_idx)
 
         return self
 
+    def _collect_votes(self, X: np.ndarray) -> np.ndarray:
+        n_samples = len(X)
+        n_classes = len(self.classes_)
+        votes = np.zeros((n_samples, n_classes), dtype=np.int64)
+        if n_samples == 0 or not self.models_:
+            return votes
+
+        row_idx = np.arange(n_samples)
+        n_features = X.shape[1]
+        for model, feat_idx in zip(self.models_, self.feature_subsets_):
+            X_in = X if len(feat_idx) == n_features else X[:, feat_idx]
+            preds = model.predict(X_in)
+            col_idx = np.searchsorted(self.classes_, preds)
+            votes[row_idx, col_idx] += 1
+        return votes
+
     def predict(self, X: np.ndarray) -> np.ndarray:
-        """Step 9 & 10: Collect independent predictions and perform majority voting."""
+        """Collect independent predictions and perform deterministic majority voting."""
         X = np.asarray(X, dtype=np.float64)
-        all_preds = np.array([model.predict(X) for model in self.models_])
-        final_preds = []
-        for i in range(len(X)):
-            sample_preds = all_preds[:, i]
-            counts = Counter(sample_preds)
-            majority_class = counts.most_common(1)[0][0]
-            final_preds.append(majority_class)
-        return np.array(final_preds)
+        if len(X) == 0:
+            return np.empty(0, dtype=self.classes_.dtype if self.classes_ is not None else int)
+        votes = self._collect_votes(X)
+        return self.classes_[np.argmax(votes, axis=1)]
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         X = np.asarray(X, dtype=np.float64)
-        all_preds = np.array([model.predict(X) for model in self.models_])
-        probs = []
-        for i in range(len(X)):
-            sample_preds = all_preds[:, i]
-            counts = Counter(sample_preds)
-            prob_vec = [counts.get(c, 0) / self.n_bags_ for c in self.classes_]
-            probs.append(prob_vec)
-        return np.array(probs)
+        if len(X) == 0:
+            return np.empty((0, len(self.classes_)), dtype=np.float64)
+        votes = self._collect_votes(X)
+        return votes / float(self.n_bags_)

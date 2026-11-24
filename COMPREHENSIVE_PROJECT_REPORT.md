@@ -4,17 +4,18 @@
 
 ## 1. Executive Summary & Project Objective
 
-The Fuzzy Min-Max Neural Network (FMNN), introduced by Patrick K. Simpson in 1992, is an online neuro-fuzzy architecture that learns pattern clusters via $n$-dimensional hyperboxes. While interpretable and rapid for streaming inputs, classic FMNN exhibits three critical structural flaws:
+The Fuzzy Min-Max Neural Network (FMNN), introduced by Patrick K. Simpson in 1992, is an online neuro-fuzzy architecture that learns pattern clusters via $n$-dimensional hyperboxes. While interpretable and fast for small streams, classic FMNN exhibits three structural bottlenecks:
 1. **Destructive Overlap Contraction**: When hyperboxes of different classes collide, a 4-case heuristic clips coordinate boundaries along the dimension of minimal overlap, distorting natural cluster geometry.
-2. **Severe Input-Order Sensitivity**: Because contraction depends on sequential pairwise collisions, changing the presentation order of training vectors reshapes the entire hyperbox configuration.
-3. **Inherent Sequentiality (Parallelization Bottleneck)**: Standard online FMNN cannot be parallelized across multi-core processors. Attempting to shard training data across cores creates uncontracted cross-partition boundary collisions, causing hyperbox inflation and accuracy degradation.
+2. **Severe Input-Order Sensitivity**: Because contraction depends on sequential pairwise collisions, changing the presentation order of training vectors reshapes the hyperbox configuration.
+3. **Inherent Sequentiality (Parallelization Bottleneck)**: Standard online FMNN cannot be parallelized across multi-core processors without altering the algorithm. Sharding training data across cores either breaks global contraction (box-pooling collisions + hyperbox bloat) or shrinks per-learner sample coverage to $N/p$ (degrading test accuracy even under majority voting).
 
 **Project Objective**:
-Implement, benchmark, and evaluate the **Random-Sampling-Based Fuzzy Min-Max Neural Network Ensemble (RF-FMNN)**. RF-FMNN resolves these flaws by:
-- Replacing the sequential learning loop with an independent bootstrap bagging architecture.
-- Removing overlap contraction entirely (uncontracted hyperboxes).
-- Resolving multi-class overlapping regions via Euclidean distance to arithmetic training data centroids (accounting for sample multiplicity).
-- Distributing bag generation, training, and inference across 1, 2, 4, and 8 CPU cores via the **Ray** distributed execution engine.
+Implement, benchmark, and evaluate the **Random-Sampling-Based Fuzzy Min-Max Neural Network Ensemble (RF-FMNN)** using strictly leak-free cross-validation and stateful **Ray Actor** parallelization:
+- Replacing sequential contraction with an independent bootstrap ensemble (`n_estimators=30` matched to Random Forest, or Coupon-Collector stopping rule).
+- Supporting both full-feature row bagging (`max_features=None`) and feature-subspace sampling (`max_features='sqrt'`).
+- Maintaining arithmetic data centroids via running sum and sample count (`sample_sum / sample_count`) in $O(d)$ memory (zero raw sample copy retention, exact bootstrap multiplicity).
+- Vectorizing both `SingleFMNN.fit()` and batch `predict()` in C-level NumPy operations.
+- Distributing training and inference across 1, 2, 4, and 8 CPU cores using **Stateful Ray Actors** (`@ray.remote class FMNNWorker`) + zero-copy Plasma Object Store (`ray.put`).
 
 ---
 
@@ -24,31 +25,31 @@ Implement, benchmark, and evaluate the **Random-Sampling-Based Fuzzy Min-Max Neu
 
 ```
 +-------------------------------------------------------------------------+
-|                         Training Data D (N x d)                         |
+|                    Raw Fold Training Data (N_tr x d)                    |
+|         -> Fit MinMaxScaler strictly on X_train (test clipped [0,1])    |
 +-------------------------------------------------------------------------+
                                      |
-               [ Coupon-Collector Bootstrap Resampling ]
-             (Sample with replacement until all N IDs covered)
+             [ Bootstrap Sampling (Fixed M or Coupon-Collector) ]
+              Optional feature subspace selection: k = floor(sqrt(d))
+                                     |
+             [ ray.put(X_train), ray.put(y_train) -> Plasma Store ]
                                      |
          +---------------------------+---------------------------+
          |                           |                           |
-     Bag 1 (N x d)               Bag 2 (N x d)               Bag M (N x d)
+   FMNNWorker Actor 1          FMNNWorker Actor 2          FMNNWorker Actor p
+   (Pinned Worker RAM)         (Pinned Worker RAM)         (Pinned Worker RAM)
          |                           |                           |
-  (Ray Worker 1)              (Ray Worker 2)              (Ray Worker M)
-         |                           |                           |
-  [ Expand Hyperboxes ]       [ Expand Hyperboxes ]       [ Expand Hyperboxes ]
+  [ Vectorized Expand ]       [ Vectorized Expand ]       [ Vectorized Expand ]
    - Bound: theta              - Bound: theta              - Bound: theta
    - NO CONTRACTION            - NO CONTRACTION            - NO CONTRACTION
+   - O(d) sample_sum/count     - O(d) sample_sum/count     - O(d) sample_sum/count
          |                           |                           |
-  [ Compute Centroids ]       [ Compute Centroids ]       [ Compute Centroids ]
-   - Mean of assigned pts      - Mean of assigned pts      - Mean of assigned pts
-   - Count multiplicity        - Count multiplicity        - Count multiplicity
+   Models stay pinned          Models stay pinned          Models stay pinned
+   (Zero model pickling)       (Zero model pickling)       (Zero model pickling)
          \                           |                           /
           +--------------------------+--------------------------+
                                      |
-                       [ Trained Ensemble Model ]
-                                     |
-                        Test Query Point x (1 x d)
+                     Test Query Batch X_test -> Plasma Store
                                      |
            +-------------------------+-------------------------+
            |                                                   |
@@ -62,197 +63,159 @@ Implement, benchmark, and evaluate the **Random-Sampling-Based Fuzzy Min-Max Neu
       \               /                                        |
        +------+------+                                         |
               |                                                |
-       [ Learner Vote v_m ] <----------------------------------+
+    [ Actor Returns (N_test x C) Vote Matrix ] <---------------+
               |
-    [ Plurality Ensemble Vote across M Learners ] -> Final Prediction
+    [ Driver Sums Vote Matrices -> Deterministic Argmax ] -> Final Prediction
 ```
 
 ### 2.2 Mathematical Specifications
 
-#### A. Bootstrap Sample Budget (Coupon-Collector Principle)
-For a training dataset of $N$ observations, each bag samples $N$ instances with replacement. The probability an observation is omitted from a bag is:
+#### A. Bootstrap Sample Budget & Coupon-Collector Formula
+For a training dataset of $N$ observations, each bag draws $N$ instances with replacement. The asymptotic out-of-bag fraction is:
 $$\lim_{N \to \infty} \left(1 - \frac{1}{N}\right)^N = \frac{1}{e} \approx 0.3679$$
-Each bag contains $\approx 63.2\%$ unique observations. Bags are drawn iteratively until the cumulative union covers 100% of observation indices:
-$$\bigcup_{b=1}^{M} S_b = \{1, 2, \dots, N\}$$
-The expected number of bags follows the Coupon Collector distribution:
-$$\mathbb{E}[M] = N \sum_{i=1}^{N} \frac{1}{i} \approx N \ln(N) \implies \text{Empirically } 5 \le M \le 9 \text{ bags for } N \in [150, 1000].$$
-To guarantee ensemble variance suppression ($\text{Var}(\bar{f}) = \rho \sigma^2 + \frac{1-\rho}{M} \sigma^2$), standard evaluation fixes $M \in [32, 64]$.
+Each bag contains $\approx 63.2\%$ unique observations. Under the Coupon-Collector stopping rule, bags are drawn iteratively until the cumulative union covers 100% of observation IDs:
+$$\bigcup_{b=1}^{B} S_b = \{1, 2, \dots, N\}$$
+Because each bag draws $N$ samples (while total individual sample draws required is $\approx N(\ln N + \gamma)$), the **expected number of bags** is:
+$$\mathbb{E}[B] \approx \ln(N) + \gamma, \quad \gamma \approx 0.5772 \text{ (Euler-Mascheroni constant)}$$
+For $N \in [150, 1000]$, $\mathbb{E}[B] \approx 5.6 \text{ to } 7.5$ bags. For fair variance stabilization against Breiman's Random Forest in cross-validation benchmarks, we also fix $M = 30$ estimators (`n_estimators=30`).
 
-#### B. Feature Subspace Sampling ($k = \lfloor\sqrt{d}\rfloor$)
-When feature subspace decorrelation is enabled:
-- Number of selected features per learner: $k = \lfloor\sqrt{d}\rfloor$.
+#### B. Feature Subspace Sampling (`max_features='sqrt'`)
+When feature subspace mode is enabled:
+- Number of selected features per learner: $k = \max(1, \lfloor\sqrt{d}\rfloor)$.
 - Probability a single feature is excluded across all $M$ learners:
   $$P(\text{Feature } j \text{ absent everywhere}) = \left(1 - \frac{k}{d}\right)^M$$
-  For $d=9, k=3, M=35$: $(6/9)^{35} = (2/3)^{35} \approx 6.4 \times 10^{-7} \approx 0\%$.
+  For $d=30, k=5, M=35$: $(25/30)^{35} = (5/6)^{35} \approx 0.0017$ (0.17%).
 
 #### C. Hyperbox Expansion Criterion
 A hyperbox $B_j = (V_j, W_j)$ expands to absorb vector $x$ if the maximum size bound $\theta \in (0, 1]$ is satisfied:
-$$\sum_{i=1}^{d} \max(w_{ji}, x_i) - \min(v_{ji}, x_i) \le d \cdot \theta$$
+$$\sum_{i=1}^{d} \left[\max(w_{ji}, x_i) - \min(v_{ji}, x_i)\right] \le d \cdot \theta$$
 
-#### D. Overlap Resolution via Multiplicity Centroids
-Hyperboxes are never contracted. Overlaps between classes are resolved at test time. For each hyperbox $B_j$ containing assigned training instances $P_j$:
-$$C_j = \frac{1}{|P_j|} \sum_{x \in P_j} x$$
-If a query point $x$ falls inside overlapping boxes belonging to multiple distinct classes $\mathcal{O}(x)$:
+#### D. Overlap Resolution via $O(d)$ Multiplicity Centroids
+Hyperboxes are never contracted. Each box maintains running `sample_sum` and `sample_count` (zero raw sample arrays retained):
+$$C_j = \frac{\text{sample\_sum}_j}{\text{sample\_count}_j} = \frac{1}{|P_j|} \sum_{x \in P_j} x$$
+If query $x$ falls inside overlapping boxes belonging to multiple distinct classes $\mathcal{O}(x)$:
 $$c^*(x) = \arg\min_{B_j \in \mathcal{O}(x)} \|x - C_j\|_2$$
-If $x$ falls outside all hyperboxes, standard Simpson fuzzy membership identifies the fallback prediction:
+With deterministic tie-breaking by lowest class index. Outside all hyperboxes, standard Simpson fuzzy membership selects the class:
 $$b_j(x) = \frac{1}{2d} \sum_{i=1}^{d} \left[ \max\left(0, 1 - \max(0, \gamma \min(1, x_i - w_{ji}))\right) + \max\left(0, 1 - \max(0, \gamma \min(1, v_{ji} - x_i))\right) \right]$$
 
 ---
 
-## 3. Comprehensive Multi-Metric Benchmark Results
+## 3. Leak-Free Multi-Metric Benchmark Results (6 Datasets, 5 Models)
 
-Evaluated via **5-Fold Stratified Cross-Validation** across 5 benchmark datasets.
-Metrics computed: **Accuracy, Precision, Recall (Sensitivity), Specificity, F1-Score, and AUC-ROC**.
+Evaluated via **5-Fold Stratified Cross-Validation** with `MinMaxScaler` fitted strictly on each training fold (`X_test` clipped to `[0, 1]`).
+Ensemble budgets matched at $M=30$ (`n_estimators=30`) for Random Forest and both Proposed RF-FMNN modes.
+Full per-model 6-metric tables in [DETAILED_METRICS_TABLES.md](experiments/results/DETAILED_METRICS_TABLES.md).
 
-### 3.1 Per-Model Performance Breakdown
+### 3.1 Overall Comparative Accuracy & F1 Summary
 
-#### Model 1: Basic FMNN (Simpson 1992)
-| Dataset | Accuracy | Precision | Recall (Sensitivity) | Specificity | F1-Score | AUC-ROC | Mean Boxes |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Iris** | 94.00% ± 3.89% | 94.57% ± 3.67% | 94.00% ± 3.89% | 97.00% ± 1.94% | 93.95% ± 3.94% | 93.13% ± 1.37% | 18.2 |
-| **Wine** | 97.75% ± 2.76% | 97.70% ± 2.82% | 98.10% ± 2.33% | 98.92% ± 1.32% | 97.77% ± 2.73% | 99.59% ± 0.29% | 46.6 |
-| **BreastCancer** | 95.96% ± 1.42% | 95.99% ± 1.37% | 95.44% ± 1.90% | 93.40% ± 4.31% | 95.65% ± 1.57% | 99.10% ± 0.84% | 78.8 |
-| **TwoMoons** | 98.67% ± 1.94% | 98.69% ± 1.92% | 98.67% ± 1.94% | 98.67% ± 2.67% | 98.67% ± 1.94% | 99.93% ± 0.13% | 21.0 |
-| **Circles** | 98.33% ± 1.05% | 98.41% ± 0.99% | 98.33% ± 1.05% | 98.67% ± 1.63% | 98.33% ± 1.06% | 99.93% ± 0.13% | 23.2 |
+| Dataset | Metric | Basic FMNN (1992) | CART Tree | Random Forest | Proposed RF-FMNN (Bagging) | Proposed RF-FMNN (Subspace sqrt) |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| **Iris** ($N=150, d=4$) | Accuracy | 93.33% +/- 3.65% | 95.33% +/- 3.40% | **95.33% +/- 3.40%** | 94.00% +/- 4.90% | 94.00% +/- 4.90% |
+| | F1-Score | 93.28% +/- 3.70% | 95.31% +/- 3.41% | **95.31% +/- 3.41%** | 93.96% +/- 4.94% | 93.96% +/- 4.94% |
+| **Wine** ($N=178, d=13$) | Accuracy | **98.89% +/- 2.22%** | 89.89% +/- 2.90% | 98.30% +/- 2.28% | 96.63% +/- 3.26% | 96.03% +/- 5.31% |
+| | F1-Score | **98.90% +/- 2.19%** | 90.12% +/- 2.80% | 98.40% +/- 2.09% | 96.66% +/- 3.19% | 96.16% +/- 5.02% |
+| **BreastCancer** ($N=569, d=30$) | Accuracy | 95.79% +/- 2.62% | 91.04% +/- 2.79% | 94.91% +/- 2.10% | **96.84% +/- 1.31%** | 96.31% +/- 1.87% |
+| | F1-Score | 95.45% +/- 2.82% | 90.28% +/- 3.17% | 94.50% +/- 2.34% | **96.61% +/- 1.41%** | 96.07% +/- 1.95% |
+| **TwoMoons** ($N=300, d=2$) | Accuracy | **99.00% +/- 1.33%** | 96.67% +/- 2.79% | 97.00% +/- 1.25% | 98.00% +/- 1.25% | 90.33% +/- 5.42% |
+| | F1-Score | **99.00% +/- 1.33%** | 96.66% +/- 2.79% | 97.00% +/- 1.25% | 98.00% +/- 1.25% | 90.25% +/- 5.55% |
+| **Circles** ($N=300, d=2$) | Accuracy | 98.33% +/- 1.05% | 96.67% +/- 2.79% | 97.67% +/- 2.00% | **98.67% +/- 1.25%** | 82.33% +/- 4.03% |
+| | F1-Score | 98.33% +/- 1.06% | 96.66% +/- 2.80% | 97.66% +/- 2.00% | **98.67% +/- 1.25%** | 81.84% +/- 4.38% |
+| **Digits** ($N=1797, d=64$) | Accuracy | 98.11% +/- 0.33% | 85.47% +/- 1.38% | 97.44% +/- 0.41% | **98.39% +/- 0.48%** | 94.44% +/- 1.17% |
+| | F1-Score | 98.10% +/- 0.33% | 85.48% +/- 1.40% | 97.43% +/- 0.41% | **98.37% +/- 0.49%** | 94.34% +/- 1.22% |
 
-#### Model 2: Decision Tree (CART)
-| Dataset | Accuracy | Precision | Recall (Sensitivity) | Specificity | F1-Score | AUC-ROC | Mean Boxes |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Iris** | 95.33% ± 3.40% | 95.72% ± 3.26% | 95.33% ± 3.40% | 97.67% ± 1.70% | 95.31% ± 3.41% | 96.50% ± 2.55% | 0.0 |
-| **Wine** | 89.89% ± 2.90% | 90.78% ± 3.35% | 90.02% ± 2.58% | 94.72% ± 1.39% | 90.12% ± 2.80% | 92.37% ± 1.98% | 0.0 |
-| **BreastCancer** | 91.04% ± 2.79% | 90.80% ± 2.45% | 90.00% ± 3.68% | 85.88% ± 7.37% | 90.28% ± 3.17% | 90.00% ± 3.68% | 0.0 |
-| **TwoMoons** | 96.67% ± 2.79% | 96.73% ± 2.76% | 96.67% ± 2.79% | 96.00% ± 3.89% | 96.66% ± 2.79% | 96.67% ± 2.79% | 0.0 |
-| **Circles** | 96.67% ± 2.79% | 96.84% ± 2.64% | 96.67% ± 2.79% | 96.67% ± 5.16% | 96.66% ± 2.80% | 96.67% ± 2.79% | 0.0 |
+### 3.2 Statistical Significance (Paired Student t-test, $\alpha = 0.05$)
 
-#### Model 3: Random Forest (Breiman)
-| Dataset | Accuracy | Precision | Recall (Sensitivity) | Specificity | F1-Score | AUC-ROC | Mean Boxes |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Iris** | 95.33% ± 3.40% | 95.72% ± 3.26% | 95.33% ± 3.40% | 97.67% ± 1.70% | 95.31% ± 3.41% | 99.53% ± 0.58% | 0.0 |
-| **Wine** | 98.30% ± 2.28% | 98.36% ± 2.12% | 98.49% ± 2.05% | 99.14% ± 1.19% | 98.40% ± 2.09% | 99.85% ± 0.19% | 0.0 |
-| **BreastCancer** | 94.91% ± 2.10% | 94.93% ± 1.82% | 94.32% ± 2.82% | 92.00% ± 6.36% | 94.50% ± 2.34% | 98.55% ± 0.78% | 0.0 |
-| **TwoMoons** | 97.00% ± 1.25% | 97.07% ± 1.25% | 97.00% ± 1.25% | 97.33% ± 1.33% | 97.00% ± 1.25% | 99.53% ± 0.49% | 0.0 |
-| **Circles** | 97.67% ± 2.00% | 97.76% ± 1.95% | 97.67% ± 2.00% | 98.67% ± 2.67% | 97.66% ± 2.00% | 99.84% ± 0.17% | 0.0 |
-
-#### Model 4: Proposed RF-FMNN
-| Dataset | Accuracy | Precision | Recall (Sensitivity) | Specificity | F1-Score | AUC-ROC | Mean Boxes |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Iris** | 94.00% ± 4.90% | 94.34% ± 4.68% | 94.00% ± 4.90% | 97.00% ± 2.45% | 93.96% ± 4.94% | 98.13% ± 1.55% | 82.4 |
-| **Wine** | 97.75% ± 2.13% | 97.70% ± 2.20% | 98.10% ± 1.78% | 98.92% ± 1.02% | 97.79% ± 2.10% | 99.60% ± 0.72% | 203.2 |
-| **BreastCancer** | **96.66% ± 1.02%** | **96.65% ± 1.24%** | **96.29% ± 1.13%** | **94.81% ± 2.77%** | **96.42% ± 1.10%** | **98.78% ± 1.04%** | 381.8 |
-| **TwoMoons** | **98.67% ± 1.25%** | **98.73% ± 1.17%** | **98.67% ± 1.25%** | **98.00% ± 2.67%** | **98.67% ± 1.25%** | **99.67% ± 0.67%** | 105.2 |
-| **Circles** | **98.33% ± 1.49%** | **98.43% ± 1.40%** | **98.33% ± 1.49%** | **99.33% ± 1.33%** | **98.33% ± 1.49%** | **99.67% ± 0.67%** | 120.0 |
+Key findings from two-sided paired t-tests across 5 CV folds ([DETAILED_METRICS_TABLES.md](experiments/results/DETAILED_METRICS_TABLES.md)):
+- **Digits ($d=64, C=10$)**: Proposed RF-FMNN (Bagging) achieves **98.39%**, outperforming Random Forest (97.44%) by **+0.95 pp** with **statistical significance ($t = +4.545, p = 0.0105 < 0.05$)**.
+- **BreastCancer ($d=30, C=2$)**: Proposed RF-FMNN (Bagging) achieves highest overall accuracy (**96.84% +/- 1.31%**), outperforming Random Forest by **+1.93 pp** ($p = 0.0854$) and Basic FMNN by **+1.05 pp** ($p = 0.2835$) while halving fold standard deviation vs Basic FMNN (2.62% to 1.31%).
+- **Row Bagging vs Subspace Sampling**: On low-dimensional non-linear manifolds (`TwoMoons` and `Circles`, $d=2 \implies k=1$), dropping one axis breaks 2D manifold geometry (statistically significant degradation, $p = 0.0010$ on Circles). On high-dimensional `BreastCancer` ($d=30$), subspace sampling reduces hyperbox count by **39.8%** (1740.4 to 1048.0 boxes) while retaining 96.31% accuracy.
 
 ---
 
-### 3.2 Overall Comparative Accuracy & F1 Summary
+## 4. Multi-Core Ray Actor Scaling & Speedup Analysis
 
-| Dataset | Metric | Basic FMNN (1992) | CART Tree | Random Forest | Proposed RF-FMNN |
-| :--- | :--- | :---: | :---: | :---: | :---: |
-| **Iris** | Accuracy | 94.00% ± 3.89% | 95.33% ± 3.40% | 95.33% ± 3.40% | **94.00% ± 4.90%** |
-| | F1-Score | 93.95% ± 3.94% | 95.31% ± 3.41% | 95.31% ± 3.41% | **93.96% ± 4.94%** |
-| **Wine** | Accuracy | 97.75% ± 2.76% | 89.89% ± 2.90% | 98.30% ± 2.28% | **97.75% ± 2.13%** |
-| | F1-Score | 97.77% ± 2.73% | 90.12% ± 2.80% | 98.40% ± 2.09% | **97.79% ± 2.10%** |
-| **BreastCancer** | Accuracy | 95.96% ± 1.42% | 91.04% ± 2.79% | 94.91% ± 2.10% | **96.66% ± 1.02%** |
-| | F1-Score | 95.65% ± 1.57% | 90.28% ± 3.17% | 94.50% ± 2.34% | **96.42% ± 1.10%** |
-| **TwoMoons** | Accuracy | 98.67% ± 1.94% | 96.67% ± 2.79% | 97.00% ± 1.25% | **98.67% ± 1.25%** |
-| | F1-Score | 98.67% ± 1.94% | 96.66% ± 2.79% | 97.00% ± 1.25% | **98.67% ± 1.25%** |
-| **Circles** | Accuracy | 98.33% ± 1.05% | 96.67% ± 2.79% | 97.67% ± 2.00% | **98.33% ± 1.49%** |
-| | F1-Score | 98.33% ± 1.06% | 96.66% ± 2.80% | 97.66% ± 2.00% | **98.33% ± 1.49%** |
+Evaluated on a 12-core Linux host with Ray 2.60.0 using **Stateful Ray Actors** (`FMNNWorker`), zero-copy Plasma Object Store, vectorized `SingleFMNN.fit()`/`predict()`, and strictly train-only MinMax scaling.
+Full report: [RAY_PARALLEL_SCALING_REPORT.md](experiments/results/RAY_PARALLEL_SCALING_REPORT.md) | Plot: `figures/ray_multicore_scaling.png`.
 
----
+### 4.1 RF-FMNN Ray Actor Scaling ($M=32$ Estimators)
 
-## 4. Multi-Core Ray Parallel Processing & Scaling Analysis
+#### Synthetic-Scaled ($N=5000, d=20$)
+| Cores ($p$) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1** | 14.549s | **1.00x** | 100.0% | 9.281s | **94.90%** | 25597 |
+| **2** | 10.290s | **1.41x** | 70.7% | 5.751s | **94.90%** | 25597 |
+| **4** | 6.766s | **2.15x** | 53.8% | 3.462s | **94.90%** | 25597 |
+| **8** | **6.709s** | **2.17x** | 27.1% | **2.923s** | **94.90%** | 25597 |
 
-Experiments conducted on a Linux host with 12 available CPU cores using Ray 2.60.0.
-Full results archived in `experiments/results/ray_scaling_results.json` and plotted in `figures/ray_multicore_scaling.png`.
+#### Real High-Dimensional: Digits ($N=1797, d=64$)
+| Cores ($p$) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1** | 4.095s | **1.00x** | 100.0% | 3.197s | **97.78%** | 10059 |
+| **2** | 3.229s | **1.27x** | 63.4% | 2.339s | **97.78%** | 10059 |
+| **4** | 2.903s | **1.41x** | 35.3% | 1.362s | **97.78%** | 10059 |
+| **8** | 3.513s | **1.17x** | 14.6% | **1.104s** | **97.78%** | 10059 |
 
-### 4.1 RF-FMNN Multi-Core Speedup ($M=32$ Estimators)
+#### Small Dataset: BreastCancer ($N=569, d=30$)
+| Cores ($p$) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time (s) | Test Accuracy | Total Boxes |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1** | 2.472s | **1.00x** | 100.0% | 0.188s | **96.49%** | 1828 |
+| **2** | 2.479s | **1.00x** | 49.9% | 0.118s | **96.49%** | 1828 |
+| **4** | 2.290s | **1.08x** | 27.0% | 0.084s | **96.49%** | 1828 |
+| **8** | 3.212s | **0.77x** | 9.6% | **0.067s** | **96.49%** | 1828 |
 
-#### Scaled Big Data ($N=3000, d=20$)
-| Cores ($p$) | Train Time (s) | Speedup ($S_p = T_1 / T_p$) | Parallel Efficiency ($E_p$) | Vectorized Inference Time (s) | Test Accuracy |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 342.64s | **1.00x** | 100.0% | **7.61s** | **96.17%** |
-| **2** | 161.09s | **2.13x** | 106.4% | **4.80s** | **96.17%** |
-| **4** | 93.82s | **3.65x** | 91.3% | **3.69s** | **96.17%** |
-| **8** | 68.93s | **4.97x** | 62.1% | **3.30s** | **96.17%** |
+**Key Systems Findings**:
+- **Vectorization Breakthrough**: Vectorizing `SingleFMNN.fit()` and removing `box.samples` memory retention slashed 1-core RF-FMNN training ($M=32$) from >340s (unvectorized on $N=3000$) down to **14.55s on larger $N=5000$** — making **8-core Ray Actor RF-FMNN (6.71s) 4.18x faster than 1-core Normal BaseFMNN (28.03s)** while achieving **+2.40 pp higher test accuracy (94.90% vs 92.50%)**!
+- **Amdahl's Law & Actor Startup Floor**: Because core training is now sub-second per bag, spawning 8 fresh Ray Actor processes inside `fit()` adds a ~2.5s fixed startup floor. On small datasets (`BreastCancer`, 2.47s on 1 core), 8-core spawn cost exceeds compute savings (`0.77x`). On larger ensembles (`M=64` on `Synthetic-Scaled`), actor startup amortizes cleanly, driving throughput from **2.07 bags/sec ($M=8$) to 5.52 bags/sec ($M=64$)** in 11.59s!
+- **Zero-Pickling Inference**: Keeping models pinned inside `FMNNWorker` Actor RAM eliminates model serialization between `fit()` and `predict()`, cutting inference latency to **0.067s** on BreastCancer, **1.10s** on Digits, and **2.92s** on Synthetic-Scaled.
 
-**Observation**:
-- Wall-clock train time drops from **342.6s down to 68.9s** (4.97x speedup on 8 cores).
-- Vectorized batch containment matrix operations reduce test-time inference latency from **232.6s down to 3.30s (70x faster total inference pipeline)**.
-- Test accuracy remains **rock solid at 96.17%** across all worker allocations because Ray zero-copy plasma tasks preserve deterministic bag isolation.
-
-#### Small Dataset ($N=569, d=30$ Breast Cancer)
-| Cores ($p$) | Train Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Vectorized Inference Time (s) | Test Accuracy |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 10.16s | **1.00x** | 100.0% | **0.78s** | 96.49% |
-| **2** | 9.09s | **1.12x** | 55.9% | **0.61s** | 96.49% |
-| **4** | 8.58s | **1.18x** | 29.6% | **0.54s** | 96.49% |
-| **8** | 6.51s | **1.56x** | 19.5% | **0.48s** | 96.49% |
-
-**Observation**:
-On small datasets ($N < 1000$), Ray IPC process-spawning overhead (~10–30ms per task) limits speedup gains beyond 2 cores. Parallel processing requires sufficient sample density to offset IPC initialization costs.
-
-### 4.2 Parallel Hyperparameter Optimization (Grid Search over $\theta$)
-Evaluated 8 candidate hyperparameter configurations: $\theta \in [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]$:
-| Cores ($p$) | Sweep Time (s) | Speedup ($S_p$) | Parallel Efficiency ($E_p$) |
-| :---: | :---: | :---: | :---: |
-| **1** | 16.33s | **1.00x** | 100.0% |
-| **2** | 11.00s | **1.48x** | 74.2% |
-| **4** | 9.41s | **1.74x** | 43.4% |
-| **8** | 10.25s | **1.59x** | 19.9% |
-
-### 4.3 Estimator Depth Scaling on 8 Cores (Throughput Analysis)
-| Estimators ($M$) | Train Time (s) | Throughput (Bags/sec) | Test Accuracy |
-| :---: | :---: | :---: | :---: |
-| **8** | 15.54s | 0.51 bags/sec | 96.17% |
-| **16** | 31.58s | 0.51 bags/sec | 95.17% |
-| **32** | 36.44s | 0.88 bags/sec | 96.17% |
-| **64** | 47.45s | **1.35 bags/sec** | **96.50%** |
-
-**Observation**: Increasing ensemble depth $M$ amortizes Ray cluster startup costs, raising training throughput by **+164%** (from 0.51 to 1.35 bags/sec).
+### 4.2 Estimator Depth Scaling on 8 Cores ($N=5000, d=20$)
+| Estimators ($M$) | Train Time (s) | Throughput (Bags/sec) | Test Accuracy | Total Boxes |
+| :---: | :---: | :---: | :---: | :---: |
+| **8** | 3.856s | 2.07 | 93.70% | 6372 |
+| **16** | 5.885s | 2.72 | 95.50% | 12752 |
+| **32** | 7.578s | 4.22 | 94.90% | 25597 |
+| **64** | 11.592s | **5.52** | **95.00%** | 51322 |
 
 ---
 
-## 5. Failure Mode Analysis of Normal FMNN under Data Partitioning
+## 5. Parallelizing Normal FMNN: Naive Box Pooling vs Fair Sharded Voting
 
-Can standard Simpson (1992) FMNN be parallelized by splitting the training dataset into $p$ partitions across $p$ Ray cores and pooling the resulting hyperboxes?
+Evaluated on `Synthetic-Scaled (N=5000, d=20)` (4000 train, 1000 test) comparing two ways of parallelizing Simpson (1992) BaseFMNN across $p$ cores:
 
-### Empirical Test on Synthetic Scaled Dataset ($N=3000, d=20$):
-| Cores ($p$) | Train Time (s) | Speedup ($S_p$) | Test Accuracy | Total Hyperbox Count | Failure Mode Dynamics |
-| :---: | :---: | :---: | :---: | :---: | :--- |
-| **1** | 8.72s | 1.00x | **92.17%** | 769 | Baseline serial execution with full global contraction |
-| **2** | 4.51s | 1.93x | **91.67%** | 799 (+30) | Inter-shard cross-class collisions uncontracted |
-| **4** | 2.81s | 3.10x | **91.50%** | 820 (+51) | Multiple boundary violations; decision ambiguity |
-| **8** | 3.09s | 2.82x | **91.83%** | 855 (+86) | Severe hyperbox bloat (+11.2%); speedup plateaus |
+### 5.1 Naive Data-Partitioned Box Pooling
+| Cores ($p$) | Samples/Shard | Train Time (s) | Speedup ($S_p$) | Test Accuracy | Total Hyperboxes | Box Delta |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1** | 4000 | 28.034s | 1.00x | **92.50%** | 1235 | Baseline |
+| **2** | 2000 | 9.982s | 2.81x | **90.70%** | 1269 | +34 |
+| **4** | 1000 | 4.519s | 6.20x | **91.70%** | 1316 | +81 |
+| **8** | 500 | 3.978s | 7.05x | **90.80%** | 1367 | +132 (+10.7%) |
 
-### Why Data-Parallel Simpson FMNN Fails:
-1. **Uncontracted Boundary Collisions**: In Base FMNN, hyperbox contraction must be performed against *all* existing boxes of competing classes. When workers train on isolated shards, they never see boxes built by other workers. When the pooled boxes are merged at test time, overlapping regions contain mutually conflicting classes with no contraction applied, dropping test accuracy from **92.17% to 91.50%**.
-2. **Hyperbox Bloat (+11.2%)**: Redundant hyperboxes covering identical feature spaces are spawned on each core independently, increasing the total box count from **769 to 855**.
-3. **The RF-FMNN Solution**: RF-FMNN does not attempt to contract hyperboxes; instead, it uses arithmetic data centroids. Query points in overlapping zones are resolved mathematically via minimum Euclidean distance, converting the parallelization barrier into an embarrassingly parallel asset.
+### 5.2 Fair Sharded Majority-Voting BaseFMNN
+| Cores ($p$) | Samples/Shard | Train Time (s) | Speedup ($S_p$) | Test Accuracy | Acc Delta vs 1-Core | Total Hyperboxes |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1** | 4000 | 28.034s | 1.00x | **92.50%** | Baseline | 1235 |
+| **2** | 2000 | 8.368s | 3.35x | **89.90%** | -2.60 pp | 1269 |
+| **4** | 1000 | 2.677s | 10.47x | **90.70%** | -1.80 pp | 1316 |
+| **8** | 500 | 1.044s | 26.84x | **91.80%** | -0.70 pp | 1367 |
+
+**Architectural Takeaway**:
+- **Naive Box Pooling** fails because cross-shard overlapping boxes are never contracted, dropping accuracy by **-1.70 pp** (92.50% to 90.80%) and bloating hyperbox counts by **+10.7%** (+132 boxes).
+- **Fair Sharded Voting** avoids cross-shard collisions and runs rapidly because each worker processes only $N/p = 500$ samples, **but** reducing per-learner training data by $8\times$ degrades accuracy (-0.70 pp to -2.60 pp below 1-core BaseFMNN).
+- **Proposed RF-FMNN** trains each learner on full $N$-size bootstrap bags across Ray Actors, achieving **94.90% accuracy (+3.10 pp above Sharded-Voting BaseFMNN and +2.40 pp above 1-core BaseFMNN)** while still training **4.18x faster than 1-core BaseFMNN (6.71s vs 28.03s)**.
 
 ---
 
 ## 6. Honest Technical Critique & Academic Framing
 
-### 6.1 Real Strengths
-1. **Parallel Scalability**: Solves the 30-year-old sequential computing limitation of Simpson (1992) FMNN. Ray parallelization delivers a **5.59x speedup** on 8 cores, reducing minutes of training into seconds on large tabular datasets.
-2. **Order-Permutation Invariance**: Standard FMNN produces drastically different decision boundaries depending on the exact sequence of training rows. RF-FMNN bootstrap resampling and majority voting virtually eliminates order-presentation variance.
-3. **Preservation of High-Dimensional Geometry**: In 30-dimensional Breast Cancer, removing contraction prevents boundary clipping, allowing RF-FMNN to achieve **96.66% accuracy** (outperforming CART's 91.04% and Random Forest's 94.91%).
+### 6.1 Verified Strengths
+1. **Faster AND More Accurate Than 1-Core Normal FMNN at Scale**: On $N=5000$, 8-core Stateful Ray Actor RF-FMNN trains in **6.71s** (4.18x faster than 1-core BaseFMNN's 28.03s) and gains **+2.40 pp** accuracy (94.90% vs 92.50%).
+2. **Statistically Significant High-Dimensional Performance**: On 64-dimensional `Digits`, RF-FMNN (Bagging) achieves **98.39%** accuracy, beating Random Forest (97.44%) with $p = 0.0105$. On 30-dimensional `BreastCancer`, RF-FMNN leads all models at **96.84%**.
+3. **Zero-Leakage Rigor & Clean Systems Engineering**: Strict in-fold MinMax scaling, $O(d)$ running-sum centroids, vectorized `fit()`/`predict()`, stateful Ray Actors with zero model pickling.
 
-### 6.2 Serious Limitations & Flaws
-1. **Accuracy Ceiling on Low-Dimensional Toy Datasets**:
-   - On Iris, Wine, Two Moons, and Circles, single FMNN already hits 94–98%. RF-FMNN achieves **identical accuracy** (0.00% improvement).
-   - Claiming RF-FMNN "drastically improves classification accuracy across all domains" is false and easily disproved by peer review.
-2. **Hyperbox Memory Explosion**:
-   - Single FMNN requires 18 to 78 hyperboxes in RAM.
-   - RF-FMNN generates $M \times B \approx 380 \text{ to } 1,775$ hyperboxes ($20\times\text{--}40\times$ memory footprint).
-   - Serial test-time inference latency is higher unless Ray parallelization is used.
-3. **SOTA Tabular Reality**:
-   - Modern gradient-boosted decision trees (XGBoost, LightGBM, CatBoost) remain the industry standard for tabular tasks. The core appeal of FMNN is not leaderboard domination, but **rule extractability, fuzzy membership transparency, and hyperbox geometry interpretability**.
-
-### 6.3 Recommended Academic Positioning (For Thesis / Paper Defense)
-- **Do NOT claim**: "RF-FMNN is a novel classifier that beats all modern ML models in accuracy."
-- **DO claim**: "RF-FMNN addresses the long-standing sequential dependency and presentation-order sensitivity of the Simpson (1992) Fuzzy Min-Max Neural Network. By replacing heuristic coordinate contraction with arithmetic centroid resolution within an embarrassingly parallel bootstrap ensemble, RF-FMNN achieves near-linear Ray-distributed multi-core scaling (5.59x on 8 cores) with zero mathematical degradation in classification fidelity."
+### 6.2 Honest Limitations
+1. **Accuracy Parity on Small Toy Datasets**: On `Iris`, `Wine`, `TwoMoons`, and `Circles`, differences between Basic FMNN and RF-FMNN (Bagging) are **not statistically significant** ($p > 0.10$).
+2. **Hyperbox Memory Footprint**: Storing $M=30$ bags generates $20\times\text{--}25\times$ more hyperboxes than single BaseFMNN (e.g., 9441.6 vs 408.8 on Digits). Enabling `max_features='sqrt'` cuts box count by ~40% on high-$d$ data at a modest accuracy trade-off.
+3. **Ray Actor Startup Overhead on Tiny Data**: Spawning 8 Ray Actor OS processes takes ~2.5s; parallelizing tiny datasets ($N < 1000$) yields `<1x` speedup. Use Ray Actors when $N \ge 2000$ or $M \ge 32$.
 
 ---
 
@@ -260,37 +223,41 @@ Can standard Simpson (1992) FMNN be parallelized by splitting the training datas
 
 ```
 RF-FMNN/
-├── README.md                          # Project documentation and quickstart
+├── README.md                          # Project overview and quickstart
 ├── COMPREHENSIVE_PROJECT_REPORT.md    # Master technical report (this document)
-├── DIFFERENCE_NORMAL_VS_OUR_FMNN.md   # Structural comparison vs Simpson (1992)
-├── FEATURE_SAMPLING_EXAMPLE.md        # Feature sampling walkthrough & math
-├── WORKFLOW_AND_ARCHITECTURE.md       # Architectural plain-English explainer
-├── requirements.txt                   # Environment dependencies (including Ray)
+├── DIFFERENCE_NORMAL_VS_OUR_FMNN.md   # Structural and parallel comparison vs Simpson (1992)
+├── FEATURE_SAMPLING_EXAMPLE.md        # Feature sampling theory and 9-feature walkthrough
+├── WORKFLOW_AND_ARCHITECTURE.md       # Plain-English workflow explainer
+├── requirements.txt                   # Dependencies (NumPy, SciPy, scikit-learn, Ray)
 ├── run_all.py                         # Complete pipeline runner
-├── figures/                           # High-resolution publication plots
-│   ├── benchmark_accuracy.png         # Cross-validation accuracy comparison
-│   ├── benchmark_f1.png              # F1-score comparison
-│   ├── decision_boundaries.png        # 2D non-linear boundary plots
-│   ├── ray_multicore_scaling.png      # 4-panel multi-core Ray scaling analysis
-│   └── normal_vs_rf_fmnn_concept.png  # Contraction vs Centroid geometric diagram
+├── figures/                           # Publication figures
+│   ├── benchmark_accuracy.png         # 5-model cross-validation accuracy bars
+│   ├── benchmark_f1.png               # 5-model cross-validation F1-score bars
+│   ├── decision_boundaries.png        # 2D non-linear decision boundary comparison
+│   ├── ray_multicore_scaling.png      # 4-panel Ray Actor scaling & BaseFMNN sharding plots
+│   └── normal_vs_rf_fmnn_concept.png  # Simpson contraction vs centroid resolution diagram
 ├── src/
 │   ├── fmnn/
 │   │   ├── base_fmnn.py               # Classic Simpson (1992) FMNN
-│   │   ├── rf_fmnn.py                 # Proposed RF-FMNN implementation
-│   │   └── ray_rf_fmnn.py             # Ray-distributed parallel RF-FMNN
+│   │   ├── rf_fmnn.py                 # Vectorized RF-FMNN (Bagging + Subspace sqrt)
+│   │   └── ray_rf_fmnn.py             # Stateful Ray Actor FMNNWorker implementation
 │   ├── data/
-│   │   └── dataset_loader.py          # Benchmark loader and normalizer
+│   │   └── dataset_loader.py          # Raw leak-free dataset loader (6 datasets incl. Digits)
 │   └── utils/
 │       └── metrics.py                 # 6-metric evaluation suite
 └── experiments/
-    ├── run_benchmark.py               # 5-fold cross-validation suite
-    ├── benchmark_ray_scaling.py       # 1, 2, 4, 8 core Ray scaling runner
-    ├── plot_scaling_and_differences.py# Visualization generation script
-    ├── ablation_study.py              # Theta sensitivity analysis
+    ├── run_benchmark.py               # Leak-free 5-fold CV + paired t-test suite
+    ├── benchmark_ray_scaling.py       # 1, 2, 4, 8 core Ray Actor & sharding suite
+    ├── plot_scaling_and_differences.py# Ray scaling and conceptual diagram plotter
+    ├── ablation_study.py              # Leak-free theta sensitivity analysis
+    ├── visualize.py                   # Benchmark bar & decision boundary plotter
     └── results/                       # Experimental data artifacts
-        ├── benchmark_results.csv      # CSV cross-validation results
-        ├── benchmark_results.json     # JSON cross-validation results
-        ├── DETAILED_METRICS_TABLES.md # Extended 6-metric tables
-        ├── ray_scaling_results.json   # Machine-readable Ray scaling data
-        └── RAY_PARALLEL_SCALING_REPORT.md # Ray multi-core report
+        ├── benchmark_results.csv
+        ├── benchmark_results.json
+        ├── statistical_significance.json
+        ├── ablation_results.csv
+        ├── ablation_results.json
+        ├── DETAILED_METRICS_TABLES.md
+        ├── ray_scaling_results.json
+        └── RAY_PARALLEL_SCALING_REPORT.md
 ```

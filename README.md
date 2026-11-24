@@ -1,11 +1,10 @@
 # Random-Sampling-Based Fuzzy Min-Max Neural Network Ensemble (RF-FMNN)
 
-This repository contains the implementation, theoretical analysis, and experimental evaluation of the Random-Sampling-Based Fuzzy Min-Max Neural Network Ensemble (RF-FMNN) compared against classic Simpson (1992) FMNN, Decision Trees (CART), and Random Forest.
+This repository contains the implementation, theoretical analysis, and experimental evaluation of the Random-Sampling-Based Fuzzy Min-Max Neural Network Ensemble (RF-FMNN) compared against classic Simpson (1992) FMNN, Decision Trees (CART), and Random Forest, with distributed multi-core execution powered by stateful **Ray Actors**.
 
 ## Table of Contents
 - [Overview](#overview)
 - [Proposed Methodology](#proposed-methodology)
-- [Architecture & Workflow](#architecture--workflow)
 - [Empirical Benchmark Results](#empirical-benchmark-results)
 - [Ray Parallel Processing & Multi-Core Scaling](#ray-parallel-processing--multi-core-scaling)
 - [Sensitivity Analysis](#sensitivity-analysis)
@@ -17,98 +16,94 @@ This repository contains the implementation, theoretical analysis, and experimen
 
 ## Overview
 
-The Fuzzy Min-Max Neural Network (FMNN), introduced by Patrick K. Simpson (1992), builds hyperbox-based boundaries using fuzzy membership functions. The proposed RF-FMNN model improves classification performance by:
-1. Generating bootstrap samples with replacement until the union of unique observation IDs covers 100% of the training dataset.
-2. Training independent FMNN classifiers on each bootstrap sample without overlap contraction.
-3. Calculating arithmetic data centroids for each hyperbox based on assigned samples, counting bootstrap repetitions according to multiplicity.
-4. Resolving multi-class hyperbox overlaps using Euclidean distance to data-based centroids.
-5. Aggregating base model predictions via majority/plurality voting.
+The Fuzzy Min-Max Neural Network (FMNN), introduced by Patrick K. Simpson (1992), builds hyperbox-based boundaries using fuzzy membership functions. The proposed RF-FMNN model addresses contraction artifacts, input-order sensitivity, and sequential computing bottlenecks by:
+1. Generating bootstrap samples with replacement (fixed ensemble size $M$ or Coupon-Collector coverage rule, $\mathbb{E}[B] \approx \ln(N) + \gamma$), with optional feature subspace sampling (`max_features='sqrt'`).
+2. Training independent vectorized FMNN classifiers on each bootstrap sample without overlap contraction.
+3. Calculating arithmetic data centroids via $O(d)$ running sum and sample count (`sample_sum / sample_count`), preserving exact bootstrap multiplicity without retaining raw training copies.
+4. Resolving multi-class hyperbox overlaps using Euclidean distance to data-based centroids (with deterministic tie-breaking).
+5. Executing bag training and batch inference in parallel across CPU cores via stateful **Ray Actors** (`FMNNWorker`) and zero-copy Plasma shared memory.
 
 ---
 
 ## Proposed Methodology
 
-### 1. Bootstrap Random Sampling
-Multiple bootstrap samples are generated from the training dataset using sampling with replacement. Sampling continues until every original training observation is represented in at least one bootstrap sample.
+### 1. Leak-Free Fold Preprocessing & Bootstrap Sampling
+Normalization (`MinMaxScaler`) is fitted strictly on the training fold inside cross-validation, clipping test observations to $[0, 1]^d$. Multiple bootstrap samples of size $N$ are drawn with replacement. Two feature modes are supported:
+- **Row Bagging (`max_features=None`)**: Uses all $d$ features per learner (preserves low-dimensional manifold geometry).
+- **Subspace Sampling (`max_features='sqrt'`)**: Draws $k = \max(1, \lfloor\sqrt{d}\rfloor)$ features per learner (reduces hyperbox count by ~40% on high-dimensional data).
 
-### 2. Independent FMNN Training Without Contraction
-Each bootstrap sample is provided to a separate FMNN model. Each model initializes and expands hyperboxes up to maximum size parameter $\theta$. Overlapping hyperboxes belonging to different classes are not contracted or altered.
+### 2. Independent Vectorized FMNN Training Without Contraction
+Each bootstrap sample is passed to an independent `SingleFMNN` learner using vectorized per-class NumPy expansion. Overlapping hyperboxes belonging to different classes are not contracted.
 
-### 3. Hyperbox Centroid Calculation
-For every generated hyperbox, the centroid is calculated as the arithmetic mean of all training observations assigned to that box:
+### 3. Hyperbox Centroid Calculation & Overlap Resolution
+Each hyperbox maintains running sum and count (`sample_sum`, `sample_count`) in $O(d)$ memory:
 
-$$C_j = \frac{1}{|P_j|} \sum_{x \in P_j} x$$
+$$C_j = \frac{\text{sample\_sum}_j}{\text{sample\_count}_j} = \frac{1}{|P_j|} \sum_{x \in P_j} x$$
 
-Multiplicity of bootstrap repetitions is accounted for in the mean.
-
-### 4. Overlap Handling Using Nearest Centroid
-When a test observation falls inside multiple overlapping hyperboxes of different classes, Euclidean distance between the observation and candidate centroids is calculated:
+When a test observation falls inside overlapping hyperboxes of multiple classes:
 
 $$c^*(x) = \arg\min_{B_j \ni x} \|x - C_j\|_2$$
 
-The class associated with the nearest centroid is selected.
-
-### 5. Prediction Fallback & Ensemble Voting
-If the observation does not belong to any hyperbox, standard FMNN membership functions determine the prediction. All base models submit independent predictions, and final output is decided via majority/plurality voting.
+Outside all hyperboxes, standard Simpson fuzzy membership selects the fallback prediction. All base models vote via plurality consensus.
 
 ---
 
 ## Empirical Benchmark Results
 
-Evaluated via 5-fold stratified cross-validation across 5 diverse benchmark datasets:
+Evaluated via **5-fold stratified cross-validation** with strictly in-fold `MinMaxScaler` fitting across 6 datasets ($M=30$ estimators matched across Random Forest and RF-FMNN):
 
-| Dataset | Basic FMNN (Simpson 1992) | Decision Tree (CART) | Random Forest (Breiman) | Proposed RF-FMNN |
-| :--- | :---: | :---: | :---: | :---: |
-| **Iris** ($d=4, C=3$) | 94.00% ± 3.89% | **95.33% ± 3.40%** | **95.33% ± 3.40%** | 94.00% ± 4.90% |
-| **Wine** ($d=13, C=3$) | 97.75% ± 2.76% | 89.89% ± 2.90% | **98.30% ± 2.28%** | 97.75% ± 2.13% |
-| **BreastCancer** ($d=30, C=2$) | 95.96% ± 1.42% | 91.04% ± 2.79% | 94.91% ± 2.10% | **96.66% ± 1.02%** |
-| **TwoMoons** ($d=2, C=2$) | **98.67% ± 1.94%** | 96.67% ± 2.79% | 97.00% ± 1.25% | **98.67% ± 1.25%** |
-| **Circles** ($d=2, C=2$) | **98.33% ± 1.05%** | 96.67% ± 2.79% | 97.67% ± 2.00% | **98.33% ± 1.49%** |
+| Dataset | Basic FMNN (Simpson 1992) | Decision Tree (CART) | Random Forest (Breiman) | Proposed RF-FMNN (Bagging) | Proposed RF-FMNN (Subspace sqrt) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Iris** ($N=150, d=4$) | 93.33% +/- 3.65% | 95.33% +/- 3.40% | **95.33% +/- 3.40%** | 94.00% +/- 4.90% | 94.00% +/- 4.90% |
+| **Wine** ($N=178, d=13$) | **98.89% +/- 2.22%** | 89.89% +/- 2.90% | 98.30% +/- 2.28% | 96.63% +/- 3.26% | 96.03% +/- 5.31% |
+| **BreastCancer** ($N=569, d=30$) | 95.79% +/- 2.62% | 91.04% +/- 2.79% | 94.91% +/- 2.10% | **96.84% +/- 1.31%** | 96.31% +/- 1.87% |
+| **TwoMoons** ($N=300, d=2$) | **99.00% +/- 1.33%** | 96.67% +/- 2.79% | 97.00% +/- 1.25% | 98.00% +/- 1.25% | 90.33% +/- 5.42% |
+| **Circles** ($N=300, d=2$) | 98.33% +/- 1.05% | 96.67% +/- 2.79% | 97.67% +/- 2.00% | **98.67% +/- 1.25%** | 82.33% +/- 4.03% |
+| **Digits** ($N=1797, d=64$) | 98.11% +/- 0.33% | 85.47% +/- 1.38% | 97.44% +/- 0.41% | **98.39% +/- 0.48%** | 94.44% +/- 1.17% |
 
 ### Key Benchmark Findings:
-- **High-Dimensional Precision:** On 30-dimensional Breast Cancer, Proposed RF-FMNN achieves **96.66% accuracy**, outperforming classic FMNN (95.96%), Random Forest (94.91%), and CART (91.04%). Avoiding contraction artifacts preserves cluster geometry.
-- **Variance Stabilization:** On Two Moons, Proposed RF-FMNN matches top accuracy (98.67%) while reducing cross-validation standard deviation from **±1.94% to ±1.25%**.
-- **Detailed 6-Metric Breakdown:** See [DETAILED_METRICS_TABLES.md](experiments/results/DETAILED_METRICS_TABLES.md) for complete Accuracy, Precision, Recall, Specificity, F1, and AUC-ROC tables.
-- **Feature Subspace Sampling Theory:** See [FEATURE_SAMPLING_EXAMPLE.md](FEATURE_SAMPLING_EXAMPLE.md) for full mathematical analysis and 9-feature tumor classification walkthrough.
+- **Statistically Significant High-Dimensional Gain**: On 64-dimensional `Digits`, Proposed RF-FMNN (Bagging) achieves **98.39% accuracy**, beating Random Forest (97.44%) by +0.95 pp with statistical significance (paired Student t-test $p = 0.0105 < 0.05$).
+- **Breast Cancer Lead**: On 30-dimensional `BreastCancer`, Proposed RF-FMNN (Bagging) achieves **96.84% +/- 1.31%**, outperforming Basic FMNN (95.79%), Random Forest (94.91%), and CART (91.04%).
+- **Detailed 6-Metric & Significance Breakdown**: See [DETAILED_METRICS_TABLES.md](experiments/results/DETAILED_METRICS_TABLES.md) for Accuracy, Precision, Recall, Specificity, F1, AUC-ROC, and paired t-test p-values.
+- **Feature Subspace Sampling Theory**: See [FEATURE_SAMPLING_EXAMPLE.md](FEATURE_SAMPLING_EXAMPLE.md).
 
 ---
 
 ## Ray Parallel Processing & Multi-Core Scaling
 
-Standard Simpson FMNN is strictly sequential due to inter-sample contraction dependencies. In contrast, Proposed RF-FMNN models are embarrassingly parallel across bootstrap bags. Using the [Ray](https://www.ray.io/) framework, training and inference scale seamlessly across CPU cores.
+Using stateful **Ray Actors** (`@ray.remote class FMNNWorker`) + zero-copy Plasma shared memory (`ray.put`), trained models remain pinned in worker RAM with zero model pickling between `fit()` and `predict()`.
 
 Full scaling report: [RAY_PARALLEL_SCALING_REPORT.md](experiments/results/RAY_PARALLEL_SCALING_REPORT.md).
 
-### Multi-Core Speedup on Scaled Data ($N=3000, d=20, M=32$ Estimators)
+### Multi-Core Scaling on Synthetic-Scaled ($N=5000, d=20, M=32$ Estimators)
 
-| Cores ($p$) | Train Time | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Vectorized Inference Time | Test Accuracy |
+| Cores ($p$) | Train Time | Speedup ($S_p$) | Parallel Efficiency ($E_p$) | Inference Time | Test Accuracy |
 | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | 342.64s | **1.00x** | 100.0% | **7.61s** | **96.17%** |
-| **2** | 161.09s | **2.13x** | 106.4% | **4.80s** | **96.17%** |
-| **4** | 93.82s | **3.65x** | 91.3% | **3.69s** | **96.17%** |
-| **8** | 68.93s | **4.97x** | 62.1% | **3.30s** | **96.17%** |
+| **1** | 14.549s | **1.00x** | 100.0% | 9.281s | **94.90%** |
+| **2** | 10.290s | **1.41x** | 70.7% | 5.751s | **94.90%** |
+| **4** | 6.766s | **2.15x** | 53.8% | 3.462s | **94.90%** |
+| **8** | **6.709s** | **2.17x** | 27.1% | **2.923s** | **94.90%** |
 
-*Note: Vectorized batch containment matrix operations reduce test-time inference from 232.6s down to 3.30s (70x faster total inference pipeline).*
-
-### Why Naive Parallelization Fails on Standard FMNN
-Attempting to parallelize Simpson (1992) FMNN by partitioning data shards across cores and merging hyperboxes results in severe architectural degradation:
-- **Hyperbox Explosion:** Inter-shard hyperboxes cannot be cross-contracted, adding +86 redundant hyperboxes (+11.2%).
-- **Accuracy Loss:** Test accuracy drops from 92.17% down to 91.50% due to unresolved inter-class overlaps.
-- **RF-FMNN Advantage:** Centroid-based voting naturally eliminates the need for inter-worker contraction, preserving 100% mathematical fidelity while achieving a 5.59x wall-clock speedup.
+### Comparison Against Parallelized Normal BaseFMNN ($N=5000, d=20$)
+- **1-Core Normal BaseFMNN**: 28.034s train time, **92.50%** accuracy, 1235 hyperboxes.
+- **8-Core Naive Box-Pooling BaseFMNN**: 3.978s, **90.80%** accuracy (-1.70 pp drop from uncontracted cross-shard collisions), 1367 hyperboxes (+10.7% box bloat).
+- **8-Core Fair Sharded-Voting BaseFMNN**: 1.044s, **91.80%** accuracy (-0.70 pp drop due to $N/8 = 500$ training samples per learner).
+- **8-Core Ray Actor RF-FMNN**: **6.709s** (**4.18x faster than 1-core BaseFMNN**), **94.90% accuracy (+2.40 pp over 1-core BaseFMNN, +3.10 pp over Sharded-Voting BaseFMNN)**.
 
 ---
 
 ## Sensitivity Analysis
 
-Evaluation of maximum hyperbox expansion size $\theta \in [0.1, 0.4]$ across all 5 benchmark datasets:
+Leak-free 5-fold CV evaluation of maximum hyperbox expansion size $\theta \in [0.1, 0.4]$ (`n_estimators=30`):
 
 | Dataset | RF-FMNN ($\theta = 0.1$) | RF-FMNN ($\theta = 0.2$) | RF-FMNN ($\theta = 0.3$) | RF-FMNN ($\theta = 0.4$) |
 | :--- | :---: | :---: | :---: | :---: |
-| **Iris** | 94.00% | 94.00% | **95.33%** | 94.00% |
-| **Wine** | 95.52% | 97.75% | 97.75% | **97.76%** |
-| **BreastCancer** | **96.67%** | 96.66% | 96.14% | 94.91% |
-| **TwoMoons** | **98.67%** | **98.67%** | 98.00% | 88.67% |
-| **Circles** | **98.67%** | 98.33% | 97.67% | 93.33% |
+| **Iris** | 94.67% | 94.00% | 96.00% | **96.67%** |
+| **Wine** | 94.97% | 96.63% | **98.30%** | 97.76% |
+| **BreastCancer** | **97.01%** | 96.84% | 95.79% | 95.44% |
+| **TwoMoons** | **99.33%** | 98.00% | 97.67% | 90.67% |
+| **Circles** | **98.67%** | **98.67%** | 98.33% | 95.67% |
+| **Digits** | 98.11% | **98.39%** | 98.11% | 97.61% |
 
 ---
 
@@ -127,26 +122,27 @@ RF-FMNN/
 │   ├── benchmark_accuracy.png
 │   ├── benchmark_f1.png
 │   ├── decision_boundaries.png
-│   ├── ray_multicore_scaling.png      # Speedup, efficiency & failure mode plots
+│   ├── ray_multicore_scaling.png      # Ray Actor scaling & BaseFMNN sharding plots
 │   └── normal_vs_rf_fmnn_concept.png  # Contraction vs Centroid geometric comparison
 ├── src/
 │   ├── fmnn/
 │   │   ├── base_fmnn.py               # Classic Simpson (1992) FMNN
-│   │   ├── rf_fmnn.py                 # Proposed RF-FMNN implementation
-│   │   └── ray_rf_fmnn.py             # Ray-distributed parallel RF-FMNN
+│   │   ├── rf_fmnn.py                 # Vectorized RF-FMNN (Bagging + Subspace sqrt)
+│   │   └── ray_rf_fmnn.py             # Stateful Ray Actor RF-FMNN
 │   ├── data/
-│   │   └── dataset_loader.py          # Benchmark loader and normalizer
+│   │   └── dataset_loader.py          # Raw leak-free dataset loader (6 datasets incl. Digits)
 │   └── utils/
-│       └── metrics.py                 # Evaluation metrics and box counters
+│       └── metrics.py                 # 6-metric evaluation suite
 ├── experiments/
-│   ├── run_benchmark.py               # 5-fold cross-validation suite
-│   ├── benchmark_ray_scaling.py       # 1, 2, 4, 8 cores Ray scaling suite
+│   ├── run_benchmark.py               # Leak-free 5-fold CV + paired t-test suite
+│   ├── benchmark_ray_scaling.py       # 1, 2, 4, 8 cores Ray Actor scaling suite
 │   ├── plot_scaling_and_differences.py# Scaling and conceptual plotting script
-│   ├── ablation_study.py              # Theta sensitivity analysis
+│   ├── ablation_study.py              # Leak-free theta sensitivity analysis
 │   ├── visualize.py                   # Boundary and benchmark plotting
 │   └── results/                       # CSV, JSON, and Markdown reports
 │       ├── DETAILED_METRICS_TABLES.md
-│       └── RAY_PARALLEL_SCALING_REPORT.md
+│       ├── RAY_PARALLEL_SCALING_REPORT.md
+│       └── statistical_significance.json
 └── paper/
     └── research_paper.md              # Research paper
 ```
@@ -162,23 +158,33 @@ cd RF-FMNN
 pip install -r requirements.txt
 ```
 
-### Run All Experiments
+### Run Benchmarks & Ray Scaling
 ```bash
-python3 run_all.py
+PYTHONPATH=. python3 experiments/run_benchmark.py
+PYTHONPATH=. python3 experiments/ablation_study.py
+PYTHONPATH=. python3 experiments/visualize.py
+PYTHONPATH=. python3 experiments/benchmark_ray_scaling.py
+PYTHONPATH=. python3 experiments/plot_scaling_and_differences.py
 ```
 
-### Example Usage
+### Example Usage (Stateful Ray Actors)
 ```python
-from src.fmnn.rf_fmnn import RFFMNNClassifier
-from sklearn.datasets import load_iris
+from src.fmnn.ray_rf_fmnn import RayRFFMNNClassifier
+from sklearn.datasets import load_digits
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
+import numpy as np
 
-X, y = load_iris(return_X_y=True)
-X = MinMaxScaler().fit_transform(X)
+X, y = load_digits(return_X_y=True)
+X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+scaler = MinMaxScaler()
+X_tr = scaler.fit_transform(X_tr)
+X_te = np.clip(scaler.transform(X_te), 0.0, 1.0)
 
-clf = RFFMNNClassifier(theta=0.2, gamma=1.0)
-clf.fit(X, y)
-predictions = clf.predict(X)
+clf = RayRFFMNNClassifier(theta=0.2, gamma=1.0, n_estimators=32, num_cpus=4)
+clf.fit(X_tr, y_tr)
+predictions = clf.predict(X_te)
+clf.close()
 ```
 
 ---

@@ -2,8 +2,8 @@
   {
     "dataset": "Iris",
     "configuration": "RF-FMNN (theta = 0.1)",
-    "accuracy": 0.9400000000000001,
-    "f1_macro": 0.9398830409356724
+    "accuracy": 0.9466666666666667,
+    "f1_macro": 0.946330472646262
   },
   {
     "dataset": "Iris",
@@ -14,32 +14,32 @@
   {
     "dataset": "Iris",
     "configuration": "RF-FMNN (theta = 0.3)",
-    "accuracy": 0.9533333333333334,
-    "f1_macro": 0.9532497911445279
+    "accuracy": 0.9600000000000002,
+    "f1_macro": 0.9597984861142755
   },
   {
     "dataset": "Iris",
     "configuration": "RF-FMNN (theta = 0.4)",
-    "accuracy": 0.9400000000000001,
-    "f1_macro": 0.9394728081926897
+    "accuracy": 0.9666666666666668,
+    "f1_macro": 0.9665152780942254
   },
   {
     "dataset": "Wine",
     "configuration": "RF-FMNN (theta = 0.1)",
-    "accuracy": 0.9552380952380952,
-    "f1_macro": 0.9565331276910225
+    "accuracy": 0.9496825396825397,
+    "f1_macro": 0.9509392018212346
   },
   {
     "dataset": "Wine",
     "configuration": "RF-FMNN (theta = 0.2)",
-    "accuracy": 0.9774603174603176,
-    "f1_macro": 0.9779168148290956
+    "accuracy": 0.9663492063492063,
+    "f1_macro": 0.9665859254679582
   },
   {
     "dataset": "Wine",
     "configuration": "RF-FMNN (theta = 0.3)",
-    "accuracy": 0.9774603174603176,
-    "f1_macro": 0.9774088783211591
+    "accuracy": 0.9830158730158731,
+    "f1_macro": 0.9830526172982313
   },
   {
     "dataset": "Wine",
@@ -50,50 +50,50 @@
   {
     "dataset": "BreastCancer",
     "configuration": "RF-FMNN (theta = 0.1)",
-    "accuracy": 0.9666511411271541,
-    "f1_macro": 0.9642829001485049
+    "accuracy": 0.9701443875174662,
+    "f1_macro": 0.9678584101842771
   },
   {
     "dataset": "BreastCancer",
     "configuration": "RF-FMNN (theta = 0.2)",
-    "accuracy": 0.9666356155876418,
-    "f1_macro": 0.9641890429666955
+    "accuracy": 0.9684055270920664,
+    "f1_macro": 0.96611286989853
   },
   {
     "dataset": "BreastCancer",
     "configuration": "RF-FMNN (theta = 0.3)",
-    "accuracy": 0.9613724576929048,
-    "f1_macro": 0.9582825426897126
+    "accuracy": 0.9578636857630801,
+    "f1_macro": 0.9546108854026617
   },
   {
     "dataset": "BreastCancer",
     "configuration": "RF-FMNN (theta = 0.4)",
-    "accuracy": 0.9490762303990063,
-    "f1_macro": 0.9451119315670293
+    "accuracy": 0.9543549138332557,
+    "f1_macro": 0.9505547231623271
   },
   {
     "dataset": "TwoMoons",
     "configuration": "RF-FMNN (theta = 0.1)",
-    "accuracy": 0.9866666666666667,
-    "f1_macro": 0.9866592510196515
+    "accuracy": 0.9933333333333334,
+    "f1_macro": 0.9933259176863182
   },
   {
     "dataset": "TwoMoons",
     "configuration": "RF-FMNN (theta = 0.2)",
-    "accuracy": 0.9866666666666667,
-    "f1_macro": 0.9866573986532534
+    "accuracy": 0.9799999999999999,
+    "f1_macro": 0.9799833163395716
   },
   {
     "dataset": "TwoMoons",
     "configuration": "RF-FMNN (theta = 0.3)",
-    "accuracy": 0.9799999999999999,
-    "f1_macro": 0.9799888796201885
+    "accuracy": 0.9766666666666666,
+    "f1_macro": 0.9766490568230392
   },
   {
     "dataset": "TwoMoons",
     "configuration": "RF-FMNN (theta = 0.4)",
-    "accuracy": 0.8866666666666667,
-    "f1_macro": 0.8862287390979725
+    "accuracy": 0.9066666666666668,
+    "f1_macro": 0.9062213780379798
   },
   {
     "dataset": "Circles",
@@ -104,19 +104,43 @@
   {
     "dataset": "Circles",
     "configuration": "RF-FMNN (theta = 0.2)",
+    "accuracy": 0.9866666666666667,
+    "f1_macro": 0.9866573986532534
+  },
+  {
+    "dataset": "Circles",
+    "configuration": "RF-FMNN (theta = 0.3)",
     "accuracy": 0.9833333333333334,
     "f1_macro": 0.983317575856104
   },
   {
     "dataset": "Circles",
-    "configuration": "RF-FMNN (theta = 0.3)",
-    "accuracy": 0.9766666666666668,
-    "f1_macro": 0.9766323359966119
+    "configuration": "RF-FMNN (theta = 0.4)",
+    "accuracy": 0.9566666666666667,
+    "f1_macro": 0.9565654898569014
   },
   {
-    "dataset": "Circles",
+    "dataset": "Digits",
+    "configuration": "RF-FMNN (theta = 0.1)",
+    "accuracy": 0.9810801609408852,
+    "f1_macro": 0.9809483918127112
+  },
+  {
+    "dataset": "Digits",
+    "configuration": "RF-FMNN (theta = 0.2)",
+    "accuracy": 0.9838563912101517,
+    "f1_macro": 0.9837145516973298
+  },
+  {
+    "dataset": "Digits",
+    "configuration": "RF-FMNN (theta = 0.3)",
+    "accuracy": 0.98107397090684,
+    "f1_macro": 0.9809882828429913
+  },
+  {
+    "dataset": "Digits",
     "configuration": "RF-FMNN (theta = 0.4)",
-    "accuracy": 0.9333333333333333,
-    "f1_macro": 0.9328717519689945
+    "accuracy": 0.976069328381306,
+    "f1_macro": 0.9759974002395173
   }
 ]
