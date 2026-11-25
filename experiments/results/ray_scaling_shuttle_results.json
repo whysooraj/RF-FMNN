@@ -1,0 +1,38 @@
+{
+  "1": {
+    "warmup_time_s": 1.0839,
+    "train_time_s": 20.4741,
+    "speedup": 1.0,
+    "efficiency_pct": 100.0,
+    "inference_time_s": 1.2945,
+    "test_accuracy": 99.78,
+    "total_hyperboxes": 531
+  },
+  "2": {
+    "warmup_time_s": 1.1274,
+    "train_time_s": 11.4246,
+    "speedup": 1.79,
+    "efficiency_pct": 89.6,
+    "inference_time_s": 0.7412,
+    "test_accuracy": 99.78,
+    "total_hyperboxes": 531
+  },
+  "4": {
+    "warmup_time_s": 1.7301,
+    "train_time_s": 8.6269,
+    "speedup": 2.37,
+    "efficiency_pct": 59.3,
+    "inference_time_s": 0.4605,
+    "test_accuracy": 99.78,
+    "total_hyperboxes": 531
+  },
+  "8": {
+    "warmup_time_s": 2.3278,
+    "train_time_s": 7.4819,
+    "speedup": 2.74,
+    "efficiency_pct": 34.2,
+    "inference_time_s": 0.4485,
+    "test_accuracy": 99.78,
+    "total_hyperboxes": 531
+  }
+}

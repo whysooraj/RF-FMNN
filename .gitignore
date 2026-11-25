@@ -13,3 +13,4 @@ figures/srm_seal.jpg
 figures/srmap_header_logo.png
 .DS_Store
 *.log
+data/cache/
